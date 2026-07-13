@@ -705,24 +705,50 @@ async function cloudLoad(userId) {
   try {
     const { data, error } = await sb
       .from('cap_data')
-      .select('data, updated_at')
+      .select('data, rev, updated_at')
       .eq('user_id', userId)
       .maybeSingle();
-    if (error) { console.error('Cloud load error:', error); return null; }
-    if (!data) return null;
-    return { data: data.data || null, updatedAt: data.updated_at || null };
+    if (error) { console.error('Cloud load error:', error); return null; } // null = erreur réseau/serveur
+    if (!data) return { data: null, rev: 0, updatedAt: null, exists: false };
+    return { data: data.data || null, rev: (data.rev || 0), updatedAt: data.updated_at || null, exists: true };
   } catch (e) { console.error(e); return null; }
 }
 
-async function cloudSave(userId, payload, ts) {
+// FIX SYNC : sauvegarde en compare-and-swap sur la révision.
+// N'écrit QUE si la révision cloud vaut encore baseRev → aucun appareil ne peut
+// écraser aveuglément une version plus récente (c'était la cause de la perte de données).
+// Retourne { ok, newRev } si succès, { conflict:true, current } si le cloud a avancé ailleurs.
+async function cloudSaveCAS(userId, payload, baseRev) {
+  const stamp = new Date().toISOString();
+  const newRev = (baseRev || 0) + 1;
   try {
-    const stamp = ts || new Date().toISOString();
-    const { error } = await sb
+    // 1) Update gardé par la révision de base
+    const { data: upd, error } = await sb
       .from('cap_data')
-      .upsert({ user_id: userId, data: payload, updated_at: stamp }, { onConflict: 'user_id' });
-    if (error) console.error('Cloud save error:', error);
-    return !error;
-  } catch (e) { console.error(e); return false; }
+      .update({ data: payload, rev: newRev, updated_at: stamp })
+      .eq('user_id', userId)
+      .eq('rev', baseRev)
+      .select('rev');
+    if (error) { console.error('Cloud save error:', error); return { ok: false, error }; }
+    if (upd && upd.length) return { ok: true, newRev };
+    // 2) 0 ligne modifiée : soit pas encore de ligne, soit conflit (rev a avancé ailleurs)
+    const { data: cur, error: e2 } = await sb
+      .from('cap_data')
+      .select('data, rev, updated_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (e2) { console.error(e2); return { ok: false, error: e2 }; }
+    if (!cur) {
+      // Aucune ligne encore : on insère la base à rev 1
+      const { error: e3 } = await sb
+        .from('cap_data')
+        .insert({ user_id: userId, data: payload, rev: 1, updated_at: stamp });
+      if (e3) { console.error(e3); return { ok: false, conflict: true }; } // course d'insert → recharger
+      return { ok: true, newRev: 1 };
+    }
+    // Conflit réel : un autre appareil détient une révision plus récente
+    return { ok: false, conflict: true, current: { data: cur.data, rev: (cur.rev || 0), updatedAt: cur.updated_at } };
+  } catch (e) { console.error(e); return { ok: false, error: e }; }
 }
 
 // ============ ICONS ============
@@ -2214,8 +2240,16 @@ function CapApp({ session }) {
   // V4 4a.1 fix sync : refs pour lire l'état courant dans les handlers de fermeture (closure fraîche)
   const stateRef = useRef(state);
   const hasLoadedCloudRef = useRef(false);
-  // Clé du dernier timestamp cloud connu par CE device (base du last-write-wins)
-  const CLOUD_TS_KEY = `${STORAGE_KEY_USER}-cloudts`;
+  // FIX SYNC (révisions) : base = n° de révision cloud connu par CE device.
+  // Entier monotone → insensible au décalage d'horloge entre appareils.
+  const CLOUD_REV_KEY = `${STORAGE_KEY_USER}-cloudrev`;
+  const baseRevRef = useRef(null);
+  if (baseRevRef.current === null) {
+    try { baseRevRef.current = parseInt(localStorage.getItem(CLOUD_REV_KEY) || '0', 10) || 0; } catch { baseRevRef.current = 0; }
+  }
+  const setBaseRev = (r) => { baseRevRef.current = r; try { localStorage.setItem(CLOUD_REV_KEY, String(r)); } catch {} };
+  const skipCloudSaveRef = useRef(false);     // sauter la sauvegarde juste après une adoption cloud
+  const cloudSaveInFlightRef = useRef(false); // évite deux écritures cloud concurrentes du même device
   // Refs tenues à jour à chaque rendu (lues par les handlers pagehide/visibilitychange)
   stateRef.current = state;
   hasLoadedCloudRef.current = hasLoadedCloud;
@@ -2269,49 +2303,65 @@ function CapApp({ session }) {
     document.documentElement.setAttribute('data-theme', state.settings.theme);
   }, [state.settings.theme]);
 
+  // Adoption d'un état cloud → état local (helper commun load + résolution de conflit)
+  const adoptCloud = (cloudData) => migrateState({
+    items: cloudData.items || [],
+    categories: cloudData.categories || DEFAULT_CATEGORIES,
+    settings: { ...DEFAULT_SETTINGS, ...(cloudData.settings || {}) },
+    capacity: cloudData.capacity || {},
+    dailyIntentions: cloudData.dailyIntentions || {},
+    caps: cloudData.caps || [],
+    visions: cloudData.visions || [],
+    schemaVersion: cloudData.schemaVersion || 0,
+  });
+
+  // Sauvegarde cloud robuste (CAS), partagée par le debounce et le flush.
+  const doCloudSave = async () => {
+    if (!hasLoadedCloudRef.current) return;
+    if (cloudSaveInFlightRef.current) return;
+    cloudSaveInFlightRef.current = true;
+    try {
+      const snapshot = stateRef.current;
+      const res = await cloudSaveCAS(userId, snapshot, baseRevRef.current);
+      if (res.ok) {
+        setBaseRev(res.newRev);
+        setLastSyncedAt(Date.now());
+        setCloudStatus('synced');
+      } else if (res.conflict && res.current && res.current.data && res.current.data.items !== undefined && (res.current.rev || 0) > baseRevRef.current) {
+        // Un autre appareil détient une révision plus récente : on NE l'écrase PAS.
+        // On stashe d'abord le local non synchronisé (jamais de perte silencieuse), puis on adopte le cloud.
+        try { localStorage.setItem(`${STORAGE_KEY_USER}-conflict`, JSON.stringify(snapshot)); } catch {}
+        skipCloudSaveRef.current = true;
+        setBaseRev(res.current.rev || 0);
+        setState(adoptCloud(res.current.data));
+        setCloudStatus('synced');
+      } else {
+        setCloudStatus('error');
+      }
+    } finally {
+      cloudSaveInFlightRef.current = false;
+    }
+  };
+
   // ============ CLOUD LOAD au démarrage ============
-  // FIX SYNC : le cloud ne doit JAMAIS écraser un local plus récent.
-  // On compare le timestamp cloud au dernier timestamp connu par ce device (last-write-wins).
+  // FIX SYNC : décision fondée sur la RÉVISION (monotone), pas sur l'horloge.
+  // On n'adopte le cloud que s'il est STRICTEMENT en avance sur la révision connue de ce device.
   useEffect(() => {
     let cancelled = false;
     setCloudStatus('loading');
-    const localTs = (() => { try { return localStorage.getItem(CLOUD_TS_KEY); } catch { return null; } })();
     cloudLoad(userId).then(res => {
       if (cancelled) return;
-      const cloudData = res && res.data;
-      const cloudTs = res && res.updatedAt;
+      if (res === null) { setHasLoadedCloud(true); setCloudStatus('error'); return; } // erreur réseau → on garde le local
+      const cloudData = res.data;
+      const cloudRev = res.rev || 0;
       const cloudHasData = cloudData && cloudData.items !== undefined;
-      const localSnap = stateRef.current;
-      const localHasData = (localSnap.items && localSnap.items.length > 0) || (localSnap.caps && localSnap.caps.length > 0);
-
-      let adopt = false;
-      if (cloudHasData) {
-        if (localTs) {
-          // Base connue : on n'adopte le cloud que s'il est STRICTEMENT plus récent
-          // (= une autre session/appareil a écrit après notre dernière sauvegarde).
-          adopt = !!(cloudTs && cloudTs > localTs);
-        } else {
-          // Pas de base (1re exécution de cette version, ou nouvel appareil) :
-          // on adopte le cloud SAUF si le local contient déjà des données — on ne
-          // veut jamais écraser un local non vide dont on ignore l'âge.
-          adopt = !localHasData;
-        }
+      if (cloudHasData && cloudRev > baseRevRef.current) {
+        // Le cloud est plus avancé (un autre appareil a écrit après notre dernière sync) → on adopte.
+        skipCloudSaveRef.current = true; // pas de réécriture inutile juste après l'adoption
+        setState(adoptCloud(cloudData));
+        setBaseRev(cloudRev);
       }
-
-      if (adopt) {
-        setState(migrateState({
-          items: cloudData.items || [],
-          categories: cloudData.categories || DEFAULT_CATEGORIES,
-          settings: { ...DEFAULT_SETTINGS, ...(cloudData.settings || {}) },
-          capacity: cloudData.capacity || {},
-          dailyIntentions: cloudData.dailyIntentions || {},
-          caps: cloudData.caps || [],
-          visions: cloudData.visions || [],
-          schemaVersion: cloudData.schemaVersion || 0,
-        }));
-        if (cloudTs) { try { localStorage.setItem(CLOUD_TS_KEY, cloudTs); } catch {} }
-      }
-      // Sinon : on garde le local. Le persist effect le repoussera au cloud (et posera la base).
+      // Sinon local >= cloud → on garde le local ; le persist le repoussera via CAS (fait avancer la révision).
       setHasLoadedCloud(true);
       setCloudStatus('synced');
       setLastSyncedAt(Date.now());
@@ -2322,17 +2372,13 @@ function CapApp({ session }) {
   }, [userId]);
 
   // ============ FLUSH À LA FERMETURE / NAVIGATION ============
-  // Empêche la perte au "flèche arrière/avant" : on écrit en local (synchrone, sûr)
-  // et on tente une sauvegarde cloud immédiate avant que la page ne soit gelée/déchargée.
+  // Écrit en local (synchrone, sûr) et tente une sauvegarde cloud CAS best-effort avant le gel de la page.
   useEffect(() => {
     const flush = () => {
-      const s = stateRef.current;
-      try { localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(s)); } catch {}
+      try { localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(stateRef.current)); } catch {}
       if (!hasLoadedCloudRef.current) return;
       if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
-      const ts = new Date().toISOString();
-      // best-effort : si ça aboutit, on avance la base locale ; sinon le local reste la vérité
-      try { cloudSave(userId, s, ts).then(ok => { if (ok) { try { localStorage.setItem(CLOUD_TS_KEY, ts); } catch {} } }); } catch {}
+      try { doCloudSave(); } catch {}
     };
     const onVis = () => { if (document.visibilityState === 'hidden') flush(); };
     window.addEventListener('pagehide', flush);
@@ -2348,16 +2394,12 @@ function CapApp({ session }) {
     // Toujours sauvegarder en local immédiatement (responsif, fallback hors-ligne)
     try { localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(state)); } catch {}
 
-    // Sauvegarder au cloud avec debounce (1.5s après la dernière modif)
     if (!hasLoadedCloud) return; // Pas de save cloud avant le 1er load
+    // Ne pas réécrire au cloud juste après une adoption (load ou résolution de conflit)
+    if (skipCloudSaveRef.current) { skipCloudSaveRef.current = false; setCloudStatus('synced'); return; }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setCloudStatus('syncing');
-    saveTimerRef.current = setTimeout(async () => {
-      const ts = new Date().toISOString();
-      const ok = await cloudSave(userId, state, ts);
-      if (ok) { try { localStorage.setItem(CLOUD_TS_KEY, ts); } catch {} setLastSyncedAt(Date.now()); }
-      setCloudStatus(ok ? 'synced' : 'error');
-    }, 1500);
+    saveTimerRef.current = setTimeout(() => { doCloudSave(); }, 1500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [state, userId, hasLoadedCloud]);
 
@@ -2385,7 +2427,11 @@ function CapApp({ session }) {
         return;
       }
       // 2. Clear local cache
-      try { localStorage.removeItem(STORAGE_KEY_USER); } catch {}
+      try {
+        localStorage.removeItem(STORAGE_KEY_USER);
+        localStorage.removeItem(CLOUD_REV_KEY);
+        localStorage.removeItem(`${STORAGE_KEY_USER}-conflict`);
+      } catch {}
       // 3. Sign out (le compte auth Supabase reste — à nettoyer via Edge Function plus tard)
       await sb.auth.signOut();
     } catch (e) {
