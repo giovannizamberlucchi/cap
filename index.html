@@ -4,7 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cap — productivité TDAH</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧭</text></svg>">
+<!-- Favicon : le logo 2A « barre à roue » (design component « Cap - Exploration logo »),
+     dessiné pleine page sur une tuile papier pour tenir sur un onglet clair comme sombre.
+     Traits épaissis (jante 7, rayons 6, moyeu 7) — c'est le maximum de lisibilité possible
+     pour cette forme à 16px. Même mark que le composant <CapMark /> plus bas. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23F4EFE6%22/><path d=%22M76,40 A28,28 0 1 0 76,60%22 fill=%22none%22 stroke=%22%231C1917%22 stroke-width=%227%22/><g stroke=%22%231C1917%22 stroke-width=%226%22 stroke-linecap=%22round%22><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 transform=%22rotate(45 50 50)%22/><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 transform=%22rotate(135 50 50)%22/><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 transform=%22rotate(180 50 50)%22/><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 transform=%22rotate(225 50 50)%22/><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 transform=%22rotate(270 50 50)%22/><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 transform=%22rotate(315 50 50)%22/></g><line x1=%2250%22 y1=%2244%22 x2=%2250%22 y2=%228%22 stroke=%22%232C5F7C%22 stroke-width=%226%22 stroke-linecap=%22round%22/><circle cx=%2250%22 cy=%2250%22 r=%227%22 fill=%22%231C1917%22/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400;1,9..144,500&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -674,6 +678,22 @@ kbd {
   .week-grid { grid-template-columns: 60px repeat(7, minmax(80px, 1fr)) !important; }
   .week-grid.scrollable { overflow-x: auto; }
 }
+
+/* Écran de chargement — halo de l'étoile polaire (design component « Cap - Loader ») */
+@keyframes capStarGlow {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50% { opacity: 0.82; transform: scale(1.2); }
+}
+.cap-star-glow {
+  position: absolute;
+  inset: -70%;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ocean) 50%, transparent), transparent 66%);
+  animation: capStarGlow 2.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cap-star-glow { animation: none; opacity: 0.55; }
+}
 </style>
 </head>
 <body>
@@ -800,6 +820,103 @@ const IconSettings = (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="3"/><pa
 const IconSun = (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></>} />;
 const IconMoon = (p) => <Icon {...p} d={<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>} />;
 const IconCompass = (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></>} />;
+
+// ============ LOGO ============
+// Piste 2A « barre à roue, franche » du design component « Cap - Exploration logo » :
+// jante ouverte en C, 6 rayons-poignées + 1 rayon d'accent au nord, moyeu plein.
+// Monochrome (currentColor) → suit le thème ; l'accent suit --ocean, qui s'éclaircit en sombre.
+const CAP_SPOKES = [45, 135, 180, 225, 270, 315];
+const CapMark = ({ size = 32, accent = 'var(--ocean)', style }) => (
+  <svg viewBox="0 0 100 100" aria-hidden="true" style={{ width: size, height: size, display: 'block', flexShrink: 0, ...style }}>
+    <path d="M76,40 A28,28 0 1 0 76,60" fill="none" stroke="currentColor" strokeWidth="6" />
+    <g stroke="currentColor" strokeWidth="4.5" strokeLinecap="round">
+      {CAP_SPOKES.map(a => <line key={a} x1="50" y1="44" x2="50" y2="7" transform={`rotate(${a} 50 50)`} />)}
+    </g>
+    <line x1="50" y1="44" x2="50" y2="7" stroke={accent} strokeWidth="4.5" strokeLinecap="round" />
+    <circle cx="50" cy="50" r="5.5" fill="currentColor" />
+  </svg>
+);
+
+// Écran de chargement animé — port du design component « Cap - Loader ».
+// Les rayons s'allument en séquence sur 2 tours, dans le sens horaire ; l'est est sauté
+// (c'est là que la jante s'ouvre). La roue se fige au nord — on retrouve exactement le logo
+// statique — l'étoile polaire apparaît, puis ça reboucle.
+const CAP_LOOP_ANGLES = [0, 45, 135, 180, 225, 270, 315];
+const CAP_STEP_MS = 220;
+
+function CapLoader({ size = 178, caption = 'Ne perdez pas le nord.' }) {
+  const [active, setActive] = useState(0);
+  const [trail, setTrail] = useState(-1);
+  const [starOn, setStarOn] = useState(false);
+  const [textIn, setTextIn] = useState(false);
+
+  useEffect(() => {
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) {
+      // Pas de balayage : on montre directement l'état d'arrivée.
+      setTextIn(true); setStarOn(true);
+      return;
+    }
+    const timers = new Set();
+    const after = (ms, fn) => {
+      const id = setTimeout(() => { timers.delete(id); fn(); }, ms);
+      timers.add(id);
+    };
+    const N = CAP_LOOP_ANGLES.length;
+    const TOTAL = N * 2 + 1; // 2 tours, et on termine sur le nord
+    after(320, () => setTextIn(true));
+    const runLoop = () => {
+      setStarOn(false);
+      let s = 0;
+      const doStep = () => {
+        const a = s % N;
+        setActive(a);
+        setTrail(s === 0 ? -1 : (a - 1 + N) % N);
+        s++;
+        if (s < TOTAL) { after(CAP_STEP_MS, doStep); return; }
+        setActive(0); setTrail(-1);
+        after(CAP_STEP_MS * 1.4, () => {
+          setStarOn(true);
+          after(1700, () => after(520, runLoop));
+        });
+      };
+      doStep();
+    };
+    runLoop();
+    return () => { timers.forEach(clearTimeout); timers.clear(); };
+  }, []);
+
+  const star = Math.round(size * 0.18);
+
+  return (
+    <div className="paper-texture" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2.6rem', minHeight: '100vh', padding: '3rem 1rem', color: 'var(--ink)' }}>
+      <div style={{ position: 'relative', width: size, height: size }}>
+        <svg viewBox="0 0 100 100" aria-hidden="true" style={{ display: 'block', width: '100%', height: '100%' }}>
+          <path d="M76,40 A28,28 0 1 0 76,60" fill="none" stroke="currentColor" strokeWidth="6" />
+          <g stroke="currentColor" strokeWidth="4.5" strokeLinecap="round">
+            {CAP_LOOP_ANGLES.map(a => <line key={a} x1="50" y1="44" x2="50" y2="7" transform={`rotate(${a} 50 50)`} />)}
+          </g>
+          <g stroke="var(--ocean)" strokeWidth="5" strokeLinecap="round">
+            {CAP_LOOP_ANGLES.map((a, i) => (
+              <line key={a} x1="50" y1="44" x2="50" y2="7" transform={`rotate(${a} 50 50)`}
+                style={{ opacity: i === active ? 1 : (i === trail ? 0.32 : 0), transition: 'opacity 0.15s linear' }} />
+            ))}
+          </g>
+          <circle cx="50" cy="50" r="5.5" fill="currentColor" />
+        </svg>
+        <div style={{ position: 'absolute', top: '-4%', left: '93%', width: star, height: star, opacity: starOn ? 1 : 0, transform: `translate(-50%,-50%) scale(${starOn ? 1 : 0.4})`, transition: 'opacity 0.75s ease, transform 0.75s cubic-bezier(.2,1.5,.4,1)', pointerEvents: 'none' }}>
+          <div className="cap-star-glow" />
+          <svg viewBox="0 0 100 100" aria-hidden="true" style={{ display: 'block', position: 'relative', width: '100%', height: '100%' }}>
+            <path d="M50,6 L57,43 L82,50 L57,57 L50,94 L43,57 L18,50 L43,43 Z" fill="var(--ocean)" />
+          </svg>
+        </div>
+      </div>
+      <div className="display" role="status" style={{ fontStyle: 'italic', fontWeight: 500, fontSize: '1.55rem', lineHeight: 1.2, textAlign: 'center', opacity: textIn ? 1 : 0, transform: textIn ? 'translateY(0)' : 'translateY(10px)', transition: 'opacity 0.9s ease, transform 0.9s ease' }}>
+        {caption}
+      </div>
+    </div>
+  );
+}
 
 // ============ STORAGE ============
 const STORAGE_KEY = 'cap-app-v2';
@@ -3886,12 +4003,13 @@ function CapApp({ session }) {
           <div className="header-grid" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.5rem', borderBottom: '1px solid var(--ink)', paddingBottom: '1rem' }}>
             <div>
               <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <IconCompass size={12} />
                 {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
                 {todayCapacity && <span> · {ENERGY_PRESETS.find(p => p.id === todayCapacity.mode)?.emoji || '⚓'} {todayCapacity.hours}h</span>}
               </div>
-              <h1 className="display" style={{ fontSize: 'clamp(2.5rem, 6vw, 3.8rem)', fontWeight: 600, letterSpacing: '-0.03em', margin: 0, fontStyle: 'italic', lineHeight: 1 }}>
-                Cap
+              {/* Le logo 2A tient lieu de titre — le mot « Cap » reste pour les lecteurs d'écran. */}
+              <h1 style={{ display: 'flex', alignItems: 'center', margin: 0, lineHeight: 1 }}>
+                <CapMark size="clamp(2.8rem, 7vw, 4rem)" />
+                <span style={{ position: 'absolute', width: '1px', height: '1px', padding: 0, margin: '-1px', overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>Cap</span>
               </h1>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -8701,9 +8819,7 @@ function AuthGate() {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', color: 'var(--ink-muted)' }}>
-        <div className="display" style={{ fontStyle: 'italic', fontSize: '1.2rem' }}>Cap se réveille…</div>
-      </div>
+      <CapLoader />
     );
   }
 
@@ -8750,7 +8866,8 @@ function PasswordRecoveryScreen({ onDone }) {
     <div className="paper-texture" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
       <div style={{ maxWidth: '420px', width: '100%' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.5rem' }}>🧭 Récupération</div>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.1rem', color: 'var(--ink)' }}><CapMark size={52} /></div>
+          <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.5rem' }}>Récupération</div>
           <h1 className="display" style={{ fontSize: '2.5rem', fontWeight: 600, fontStyle: 'italic', margin: 0, letterSpacing: '-0.03em' }}>Nouveau mot de passe</h1>
         </div>
         <form onSubmit={handleSubmit} style={{ border: '1px solid var(--ink)', padding: '1.5rem', background: 'var(--paper)', borderRadius: '4px', boxShadow: '4px 4px 0 var(--shadow)' }}>
@@ -8842,7 +8959,8 @@ function LoginScreen() {
     <div className="paper-texture" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem 1rem' }}>
       <div style={{ maxWidth: '420px', width: '100%' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.5rem' }}>🧭 Productivité TDAH</div>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.1rem', color: 'var(--ink)' }}><CapMark size={68} /></div>
+          <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.5rem' }}>Productivité TDAH</div>
           <h1 className="display" style={{ fontSize: '3.5rem', fontWeight: 600, fontStyle: 'italic', margin: 0, letterSpacing: '-0.03em' }}>Cap</h1>
           <div style={{ fontSize: '0.9rem', color: 'var(--ink-muted)', marginTop: '0.5rem', fontStyle: 'italic' }}>Garde le cap. Ton rythme, ton énergie.</div>
         </div>
