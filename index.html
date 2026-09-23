@@ -1253,7 +1253,11 @@ function getRdvHalo(item, occStartMin, occDurationMin) {
   if (occStartMin == null) return null;
   const prep = (typeof item.prepDuration === 'number' && item.prepDuration > 0) ? item.prepDuration : 0;
   const trav = (typeof item.travelDuration === 'number' && item.travelDuration > 0) ? item.travelDuration : 0;
-  const ret = !!item.travelReturn && trav > 0;
+  // V5 : retour éventuellement différent de l'aller (travelReturnDuration), sinon = aller
+  const retDur = item.travelReturn
+    ? ((typeof item.travelReturnDuration === 'number' && item.travelReturnDuration > 0) ? item.travelReturnDuration : trav)
+    : 0;
+  const ret = retDur > 0;
   if (!prep && !trav && !ret) return null;
   const dur = Math.max(occDurationMin || 0, MIN_VISUAL_MIN);
   return {
@@ -1261,7 +1265,7 @@ function getRdvHalo(item, occStartMin, occDurationMin) {
     travelStart: occStartMin - trav,
     time: occStartMin,
     end: occStartMin + dur,
-    returnEnd: occStartMin + dur + (ret ? trav : 0),
+    returnEnd: occStartMin + dur + retDur,
     hasPrep: prep > 0,
     hasTravel: trav > 0,
     hasReturn: ret,
@@ -2180,7 +2184,7 @@ function findOverdueRoots(items, todayIso) {
 }
 
 // ============ MIGRATION SCHEMA V3 ============
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 
 function migrateItem(item) {
   // Type recurring → task avec recurrence quotidienne par défaut
@@ -2210,30 +2214,16 @@ function migrateItem(item) {
     recurrence = { rule: 'daily', interval: 1, weekdays: [], monthDay: null, endDate: null, endAfter: null };
   }
   const streak = wasHabit ? true : (item.streak === true);
-  // streakCount : on récupère l'ancien compteur numérique des habitudes (item.streak),
-  // ou un éventuel streakCount déjà présent (re-migration), sinon 0
-  let streakCount;
-  if (typeof item.streakCount === 'number') {
-    streakCount = item.streakCount;
-  } else if (wasHabit && typeof item.streak === 'number') {
-    streakCount = item.streak;
-  } else {
-    streakCount = 0;
-  }
   const finalType = (type === 'habit') ? 'task' : type;
-  // Nettoyer le champ frequency obsolète
-  const { frequency, ...rest } = item;
+  // Nettoyer les champs obsolètes : frequency (S5) + champs morts du streak retirés en V5 (schema v14)
+  const { frequency, streakCount: _deadStreakCount, graceDays: _deadGraceDays, lastEvaluatedPeriod: _deadLastEval, ...rest } = item;
   return {
     ...rest,
     type: finalType,
     recurrence,
     streak,
-    streakCount,
-    graceDays: item.graceDays !== undefined ? item.graceDays : 2,
     lastCompletedDate: item.lastCompletedDate !== undefined ? item.lastCompletedDate : null,
     history: item.history || [],
-    // V3 S5 : récurrence flottante — période évaluée pour streak
-    lastEvaluatedPeriod: item.lastEvaluatedPeriod !== undefined ? item.lastEvaluatedPeriod : null,
     deadline: item.deadline !== undefined ? item.deadline : null,
     exceptions: item.exceptions || {},
     durationManualOverride: item.durationManualOverride || false,
@@ -2244,6 +2234,8 @@ function migrateItem(item) {
     prepDuration: item.prepDuration !== undefined ? item.prepDuration : null,
     travelDuration: item.travelDuration !== undefined ? item.travelDuration : null,
     travelReturn: item.travelReturn !== undefined ? item.travelReturn : false,
+    // V5 (schema v14) : durée du trajet retour si différente de l'aller (null = identique à l'aller)
+    travelReturnDuration: item.travelReturnDuration !== undefined ? item.travelReturnDuration : null,
     // V3 S(A+B) schema v8 : épinglage en haut de colonne
     pinned: item.pinned || false,
     // V3 S(D) schema v9 : routines multi-créneaux par jour
@@ -3284,7 +3276,8 @@ function CapApp({ session }) {
       isImportant: data.isImportant || false, // V3 S4 : flag visibilité (RDV, etc.)
       prepDuration: data.prepDuration ?? null, // V3 S4.5 : minutes de préparation avant time
       travelDuration: data.travelDuration ?? null, // V3 S4.5 : minutes de trajet aller
-      travelReturn: data.travelReturn ?? false, // V3 S4.5 : trajet retour symétrique
+      travelReturn: data.travelReturn ?? false, // V3 S4.5 : trajet retour
+      travelReturnDuration: data.travelReturnDuration ?? null, // V5 : null = identique à l'aller
       pinned: data.pinned || false, // V3 S(A+B) : épinglé en haut de colonne
       times: Array.isArray(data.times) ? data.times : [], // V3 S(D) : créneaux multiples/jour (routines)
       slotHistory: (data.slotHistory && typeof data.slotHistory === 'object') ? data.slotHistory : {}, // V3 S(D) : créneaux faits par date
@@ -3294,11 +3287,8 @@ function CapApp({ session }) {
       createdAt: Date.now(),
       // V3 S5 : streak devient un booléen (suivre la régularité oui/non)
       streak: data.streak === true,
-      streakCount: typeof data.streakCount === 'number' ? data.streakCount : 0,
-      graceDays: typeof data.graceDays === 'number' ? data.graceDays : 2,
       lastCompletedDate: data.lastCompletedDate || null,
       history: data.history || [],
-      lastEvaluatedPeriod: data.lastEvaluatedPeriod || null,
     };
   }
 
@@ -3340,7 +3330,6 @@ function CapApp({ session }) {
       history: [],
       exceptions: {},
       lastCompletedDate: null,
-      lastEvaluatedPeriod: null,
       // isImportant nécessite date+heure ou échéance : on ne le garde que si une échéance subsiste
       isImportant: !!(src.isImportant && src.deadline),
       createdAt: Date.now(),
@@ -3691,7 +3680,7 @@ function CapApp({ session }) {
       return;
     }
     // V3 S5.5++ : si streak activé, on track via history + lastCompletedDate uniquement.
-    // Le streakCount est désormais calculé lazy à l'affichage (computeStreak), on ne l'incrémente plus ici.
+    // Le streak est calculé lazy à l'affichage (computeStreak), rien à incrémenter ici.
     // Le champ reste en data pour rétrocompat mais devient mort.
     if (item.streak) {
       const isToday = occDate === todayISO();
@@ -3791,10 +3780,7 @@ function CapApp({ session }) {
         actualMinutes: 0,
         pomosDone: 0,
         history: [],
-        // V3 S5 : streak booléen + streakCount + lastEvaluatedPeriod
         streak: item.streak === true,
-        streakCount: 0,
-        lastEvaluatedPeriod: null,
         lastCompletedDate: null,
         exceptions: {},
         // La récurrence vient soit du patch, soit héritée mais on la conserve sans endDate du parent
@@ -3825,8 +3811,6 @@ function CapApp({ session }) {
       history: [],
       // V3 S5 : occurrence détachée = tâche one-shot, pas de streak
       streak: false,
-      streakCount: 0,
-      lastEvaluatedPeriod: null,
       lastCompletedDate: null,
       createdAt: Date.now(),
     };
@@ -7636,7 +7620,7 @@ function ScopeModal({ kind, onClose, onConfirm }) {
 // Apparaît dans ItemModal uniquement si Important + heure renseignée.
 // Champs optionnels et indépendants : préparation (avant le trajet), trajet aller (toujours juste avant l'heure de RDV),
 // trajet retour symétrique cochable. Saisie en minutes via boutons rapides + input "autre".
-function PrepTravelSection({ prepDuration, travelDuration, travelReturn, onChangePrep, onChangeTravel, onToggleReturn, time }) {
+function PrepTravelSection({ prepDuration, travelDuration, travelReturn, travelReturnDuration, onChangePrep, onChangeTravel, onToggleReturn, onChangeReturnDuration, time }) {
   const PREP_PRESETS = [5, 10, 15, 30];
   const TRAVEL_PRESETS = [5, 10, 15, 30, 45];
 
@@ -7736,21 +7720,21 @@ function PrepTravelSection({ prepDuration, travelDuration, travelReturn, onChang
       </div>
       <Picker label="Préparation" value={prepDuration} presets={PREP_PRESETS} onChange={onChangePrep} emoji="🎒" />
       <Picker label="Trajet aller" value={travelDuration} presets={TRAVEL_PRESETS} onChange={onChangeTravel} emoji="🚗" />
-      {/* Trajet retour : actif seulement si trajet aller renseigné */}
+      {/* V5 : trajet retour, prérempli avec l'aller, modifiable (ex. retour à pied) */}
       <label style={{
         display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem',
-        color: trav > 0 ? 'var(--ink)' : 'var(--ink-muted)',
-        cursor: trav > 0 ? 'pointer' : 'not-allowed', opacity: trav > 0 ? 1 : 0.5,
-        marginTop: '0.2rem',
+        color: 'var(--ink)', cursor: 'pointer', marginTop: '0.2rem', marginBottom: travelReturn ? '0.5rem' : 0,
       }}>
-        <input
-          type="checkbox"
-          checked={!!travelReturn}
-          disabled={trav <= 0}
-          onChange={onToggleReturn}
-        />
-        <span>🔄 Trajet retour identique ({trav > 0 ? trav + ' min' : 'définis l\'aller d\'abord'})</span>
+        <input type="checkbox" checked={!!travelReturn} onChange={onToggleReturn} />
+        <span>🔄 Trajet retour</span>
       </label>
+      {travelReturn && (
+        <Picker label={`Trajet retour${travelReturnDuration == null && trav > 0 ? ' (= aller)' : ''}`}
+          value={travelReturnDuration != null ? travelReturnDuration : (trav > 0 ? trav : null)}
+          presets={TRAVEL_PRESETS}
+          onChange={onChangeReturnDuration}
+          emoji="🏠" />
+      )}
       {showHint && (
         <div style={{ fontSize: '0.7rem', color: 'var(--ink-muted)', marginTop: '0.55rem', fontStyle: 'italic', lineHeight: 1.4 }}>
           {prep > 0 && trav > 0 && `🎒 Prep à ${minToTime(prepStartMin)} → 🚗 départ à ${minToTime(departMin)} → RDV à ${time}`}
@@ -8912,6 +8896,7 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
     prepDuration: item?.prepDuration ?? pre.prepDuration ?? null,
     travelDuration: item?.travelDuration ?? pre.travelDuration ?? null,
     travelReturn: item?.travelReturn ?? pre.travelReturn ?? false,
+    travelReturnDuration: item?.travelReturnDuration ?? pre.travelReturnDuration ?? null, // V5
     // V3 S5 : streak (suivre la régularité)
     streak: item?.streak === true,
     // V3 S(D) : créneaux multiples par jour pour routines. Pré-rempli depuis times, sinon depuis l'heure unique.
@@ -8919,7 +8904,7 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
     // V4 4a.1 : filiation cap. Sous-tâche hérite du capId du parent ; sinon prefill ou existant.
     capId: item?.capId !== undefined ? item.capId : (pre.capId !== undefined ? pre.capId : (inheritFromParent ? (parentItem.capId || null) : null)),
     pillars: item?.pillars || pre.pillars || [], // V4 4b
-    // streakCount, history, lastEvaluatedPeriod conservés tels quels via le passthrough handleSave
+    // history conservé tel quel via le passthrough handleSave
   });
   const [showAddCat, setShowAddCat] = useState(false);
   const [newCatName, setNewCatName] = useState('');
@@ -9366,6 +9351,10 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
             prepDuration={form.prepDuration}
             travelDuration={form.travelDuration}
             travelReturn={form.travelReturn}
+            travelReturnDuration={form.travelReturnDuration ?? null}
+            onChangeReturnDuration={(v) => setForm(f => v === null
+              ? { ...f, travelReturn: false, travelReturnDuration: null } // « Aucun » = pas de retour
+              : { ...f, travelReturnDuration: v === f.travelDuration ? null : v })} // = aller → on garde le lien
             onChangePrep={(v) => setForm(f => ({ ...f, prepDuration: v }))}
             onChangeTravel={(v) => setForm(f => ({ ...f, travelDuration: v }))}
             onToggleReturn={() => setForm(f => ({ ...f, travelReturn: !f.travelReturn }))}
