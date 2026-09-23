@@ -2158,7 +2158,7 @@ function findOverdueRoots(items, todayIso) {
 }
 
 // ============ MIGRATION SCHEMA V3 ============
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 function migrateItem(item) {
   // Type recurring → task avec recurrence quotidienne par défaut
@@ -2266,6 +2266,8 @@ function migrateState(state) {
     quits: state.quits || [],
     // V4 4c : argent (opérations ponctuelles + flux récurrents)
     money: state.money || { entries: [], flows: [] },
+    // V4 4f (schema v13) : journal des pomodoros terminés (prime time observé passivement)
+    focusLog: state.focusLog || [],
     schemaVersion: SCHEMA_VERSION,
   };
 }
@@ -2289,6 +2291,7 @@ function normalizeLoadedState(raw) {
     weeklyFocus: r.weeklyFocus || {},
     quits: r.quits || [],
     money: { entries: [], flows: [], ...(r.money || {}) },
+    focusLog: r.focusLog || [],
     schemaVersion: r.schemaVersion || 0,
   });
 }
@@ -2816,6 +2819,9 @@ function CapApp({ session }) {
                 pomosDone: (item.pomosDone || 0) + 1,
               });
             }
+            // V4 4f : on note l'heure de fin du pomodoro (1000 dernières entrées), rien d'autre
+            const doneAt = Date.now(), min = Math.round(r.totalSeconds / 60);
+            setState(s => ({ ...s, focusLog: [...(s.focusLog || []), { at: doneAt, min, itemId: r.itemId }].slice(-1000) }));
             playBell(880);
             notify('Focus terminé', 'Petite pause, tu l\'as méritée 🌿');
             const newCycles = r.cycles + 1;
@@ -8474,6 +8480,20 @@ function computeTimeSpent(items, caps, start, end) {
   });
   return res;
 }
+// V4 4f : prime time observé passivement. Fenêtre de 2 h où tu termines le plus de pomodoros,
+// sur les 60 derniers jours. Rien avant ~10 sessions étalées sur au moins 2 semaines.
+function computePrimeTime(focusLog, now = Date.now()) {
+  const recent = (focusLog || []).filter(e => now - e.at < 60 * 86400000);
+  if (recent.length < 10) return { ready: false, count: recent.length };
+  const span = Math.max(...recent.map(e => e.at)) - Math.min(...recent.map(e => e.at));
+  if (span < 14 * 86400000) return { ready: false, count: recent.length };
+  const byHour = Array(24).fill(0);
+  recent.forEach(e => { byHour[new Date(e.at - (e.min || 0) * 60000).getHours()]++; });
+  // Heure de pointe, élargie à 2 h du côté du voisin le plus fourni
+  const peak = byHour.indexOf(Math.max(...byHour));
+  const from = (peak === 23 || (peak > 0 && byHour[peak - 1] > byHour[peak + 1])) ? peak - 1 : peak;
+  return { ready: true, from, to: from + 2, hits: byHour[from] + byHour[from + 1], count: recent.length };
+}
 const fmtHours = (min) => { const m = Math.round(min || 0); if (m < 60) return `${m} min`; const h = Math.floor(m / 60), r = m % 60; return r ? `${h} h ${String(r).padStart(2, '0')}` : `${h} h`; };
 
 function HBar({ label, value, max, color, hint }) {
@@ -8541,6 +8561,16 @@ function FluxPanel({ state }) {
               {ENERGY_PRESETS.filter(p => checkins[p.id]).map(p => <span key={p.id} className="chip">{p.emoji} {p.label} · {checkins[p.id]} j</span>)}
               {checkins.custom && <span className="chip">⚓ Au feeling · {checkins.custom} j</span>}
             </div>}
+        {(() => {
+          const pt = computePrimeTime(state.focusLog);
+          return (
+            <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: pt.ready ? 'var(--ink-soft)' : 'var(--ink-fog)' }}>
+              {pt.ready
+                ? <>🕘 Tu démarres le plus souvent tes pomodoros entre <strong>{pt.from} h et {pt.to} h</strong> ({pt.hits} sur {pt.count}, 60 derniers jours). Une observation, pas une consigne.</>
+                : <>🕘 Ton « prime time » apparaîtra ici après une dizaine de pomodoros sur deux semaines ({pt.count} pour l'instant).</>}
+            </div>
+          );
+        })()}
         {quits.length > 0 && (
           <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>
             Ce que tu arrêtes : {quits.map(q => `${q.title} (${quitStreak(q)} j sans)`).join(' · ')}
