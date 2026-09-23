@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lot 1 codé sur la branche `claude/zealous-lovelace-lmedot`, en test sur preview**. Schema version **14** sur la branche (13 en prod).
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lot 1 en prod le 2026-09-23**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -572,7 +572,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lot 1 codé, lots 2-8 à coder)
+## V5 — cadrage validé le 2026-09-23 (lot 1 en prod, lots 2-8 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -588,7 +588,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 | 7 | Remplissage auto de la journée |
 | 8 | Import calendrier externe (Google) |
 
-### Lot 1 — S7 irritants ✅ codé (branche, en test)
+### Lot 1 — S7 irritants ✅ en prod (2026-09-23)
 - **Date/heure passée à la création** : avertissement non bloquant ; jamais sur les routines (rattrapage).
 - **Trajet retour asymétrique** : champ retour séparé, prérempli avec l'aller.
 - **Badge « en retard de prep »** : reste visible en ocre jusqu'à l'heure du RDV.
