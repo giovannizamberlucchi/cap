@@ -174,6 +174,27 @@ html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink);
   margin-top: 0.6rem; padding: 0.6rem 0.75rem; border: 1px solid var(--line);
   border-left: 3px solid var(--ink-fog); background: var(--paper-2); border-radius: 3px; color: var(--ink-soft);
 }
+/* ===== V4 4a.3 — rituel hebdo ===== */
+.review-invite {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  border: 1px solid var(--line); border-left: 4px solid #6B4E8A; background: var(--paper-2);
+  border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 1rem;
+}
+.review-modal { max-width: 620px; }
+.review-facts { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.review-facts span {
+  font-family: var(--font-mono); font-size: 0.72rem; color: var(--ink-soft); background: var(--paper-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem;
+}
+.review-list { margin: 0.3rem 0 0.4rem; padding-left: 1.1rem; font-size: 0.82rem; color: var(--ink-soft); }
+.review-list li { margin: 0.12rem 0; }
+.review-nudge { margin-top: 0.8rem; padding: 0.6rem 0.75rem; border: 1px dashed var(--moss); border-radius: 3px; }
+.focus-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; text-transform: none; letter-spacing: 0;
+  font-family: var(--font-body); font-size: 0.72rem; color: #6B4E8A; border: 1px solid #6B4E8A;
+  border-radius: 999px; padding: 0.05rem 0.55rem; background: rgba(107,78,138,0.08);
+}
+[data-theme="dark"] .focus-chip { color: #A88AC8; border-color: #A88AC8; background: rgba(168,138,200,0.14); }
 .cap-lowmode {
   display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; flex-wrap: wrap;
   font-size: 0.8rem; color: var(--ink-soft); background: var(--paper-2);
@@ -2191,6 +2212,9 @@ function migrateState(state) {
     visions: state.visions || [],
     // V4 4a.2 : mode bas régime (kill-switch de toute confrontation)
     lowMode: state.lowMode || { on: false, since: null },
+    // V4 4a.3 : rituels (hebdo + focale mensuelle) et focus de la semaine
+    reviews: state.reviews || { weekly: {}, monthly: {} },
+    weeklyFocus: state.weeklyFocus || {},
     schemaVersion: SCHEMA_VERSION,
   };
 }
@@ -2210,6 +2234,8 @@ function normalizeLoadedState(raw) {
     caps: r.caps || [],
     visions: r.visions || [],
     lowMode: r.lowMode || { on: false, since: null },
+    reviews: { weekly: {}, monthly: {}, ...(r.reviews || {}) },
+    weeklyFocus: r.weeklyFocus || {},
     schemaVersion: r.schemaVersion || 0,
   });
 }
@@ -2401,6 +2427,78 @@ function capDeadlineQuestionDue(node, depth, today = todayISO(), now = Date.now(
     && (d.answer !== 'later' || now - d.at < CAP_LATER_MS));
 }
 
+// ============ V4 4a.3 : RITUEL HEBDO ============
+// Semaine regardée par le rituel : du vendredi au dimanche = la semaine en cours ;
+// le lundi = la semaine qui vient de finir (on rattrape le point du week-end).
+function reviewWeekFor(now = new Date()) {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (d.getDay() === 1) d.setDate(d.getDate() - 1);
+  const range = weekRange(d);
+  const nextMonday = addDays(range.end, 1);
+  return { weekId: isoWeekId(d), range, nextMonday, nextWeekId: isoWeekId(isoToDate(nextMonday)) };
+}
+// Fenêtre d'invitation : vendredi 17h → lundi soir
+function isReviewWindow(now = new Date()) {
+  const dow = now.getDay();
+  return dow === 6 || dow === 0 || dow === 1 || (dow === 5 && now.getHours() >= 17);
+}
+// Semaine du focus « en cours » : le focus posé au rituel vaut pour la semaine qui suit
+function currentFocusWeekId(now = new Date()) { return isoWeekId(now); }
+
+// Dernière activité d'un cap : création/changement de statut/décision du cap et de ses
+// descendants + création/complétion des tâches liées au sous-arbre. Aucun stockage.
+function capLastActivity(node, allItems) {
+  const ids = new Set(collectCapIds(node));
+  let last = 0;
+  const walk = (n) => {
+    last = Math.max(last, n.createdAt || 0, n.statusChangedAt || 0, n.reachedAt || 0,
+      ...((n.decisions || []).map(d => d.at || 0)));
+    (n.children || []).forEach(walk);
+  };
+  walk(node);
+  allItems.forEach(it => {
+    if (it.capId && ids.has(it.capId)) last = Math.max(last, it.createdAt || 0, it.completedAt || 0);
+  });
+  return last;
+}
+const CAP_ZOMBIE_MS = 21 * 24 * 3600 * 1000;
+// Caps « zombies » : objectifs et projets actifs sans aucune activité depuis ~3 semaines.
+// Un projet n'est pas signalé si son objectif l'est déjà (une seule question suffit).
+function findZombieCaps(caps, items, now = Date.now()) {
+  const all = flattenItems(items);
+  const out = [];
+  caps.filter(o => o.status === 'active').forEach(o => {
+    if (now - capLastActivity(o, all) > CAP_ZOMBIE_MS) { out.push({ node: o, depth: 0 }); return; }
+    (o.children || []).filter(p => p.status === 'active').forEach(p => {
+      if (now - capLastActivity(p, all) > CAP_ZOMBIE_MS) out.push({ node: p, depth: 1, parent: o });
+    });
+  });
+  return out;
+}
+// Projets (depth 1) actifs dont le rythme demande un regard (rien n'a bougé / un jalon attend)
+function findPaceConcerns(caps, today = todayISO()) {
+  const out = [];
+  caps.filter(o => o.status === 'active').forEach(o => (o.children || []).filter(p => p.status === 'active').forEach(p => {
+    const pace = capPace(p, today);
+    if (pace === 'still' || pace === 'behind') {
+      out.push({ node: p, parent: o, pace, overdue: (p.children || []).filter(c => c.status === 'active' && c.deadline && c.deadline < today) });
+    }
+  }));
+  return out;
+}
+// Liste plate des caps actifs (pour choisir le focus) : [{ id, label, depth }]
+function activeCapOptions(caps) {
+  const out = [];
+  const walk = (n, depth, prefix) => {
+    if (n.status !== 'active') return;
+    const label = prefix ? `${prefix} › ${n.title}` : n.title;
+    out.push({ id: n.id, label, depth });
+    (n.children || []).forEach(c => walk(c, depth + 1, label));
+  };
+  caps.forEach(o => walk(o, 0, ''));
+  return out;
+}
+
 // ============ MAIN APP ============
 function CapApp({ session }) {
   const userId = session.user.id;
@@ -2456,6 +2554,7 @@ function CapApp({ session }) {
   const [showSuggestion, setShowSuggestion] = useState(false);
   const [showCheckin, setShowCheckin] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showReview, setShowReview] = useState(false); // V4 4a.3 : rituel hebdo
   const [focusMode, setFocusMode] = useState(null);
   const [calView, setCalView] = useState('day');
   const [calDate, setCalDate] = useState(todayISO());
@@ -2741,12 +2840,13 @@ function CapApp({ session }) {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
     }
     function anyModalOpen() {
-      return showAddModal || showQuickAdd || editingItem || showSuggestion || showCheckin || showSettings;
+      return showAddModal || showQuickAdd || editingItem || showSuggestion || showCheckin || showSettings || showReview;
     }
     function handleKey(e) {
       // Échap : ferme modals (priorité du plus récent au plus ancien d'apparition logique)
       if (e.key === 'Escape' && !e.isComposing) {
         if (showSettings) { setShowSettings(false); e.preventDefault(); return; }
+        if (showReview) { setShowReview(false); e.preventDefault(); return; }
         if (showCheckin) { setShowCheckin(false); e.preventDefault(); return; }
         if (showSuggestion) { setShowSuggestion(false); e.preventDefault(); return; }
         if (editingItem) { setEditingItem(null); e.preventDefault(); return; }
@@ -2825,7 +2925,7 @@ function CapApp({ session }) {
     }
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [showAddModal, showQuickAdd, editingItem, showSuggestion, showCheckin, showSettings, focusMode, running, selectedItemId, state.items]);
+  }, [showAddModal, showQuickAdd, editingItem, showSuggestion, showCheckin, showSettings, showReview, focusMode, running, selectedItemId, state.items]);
 
   // ============ V3 S4 : AUTO-SCROLL PENDANT DRAG ============
   // Quand le curseur approche du bord haut/bas pendant un drag, scroll auto.
@@ -3237,6 +3337,39 @@ function CapApp({ session }) {
     showToast(on ? 'Période de pause. Les caps dorment en silence — aucune question tant que tu ne reprends pas.' : 'Reprise. La Boussole reparle, doucement.');
   }
   const lowModeOn = !!(state.lowMode && state.lowMode.on);
+
+  // V4 4a.3 : rituel hebdo
+  const reviewWeek = reviewWeekFor(new Date());
+  const reviewEntry = (state.reviews?.weekly || {})[reviewWeek.weekId];
+  const showReviewInvite = !lowModeOn && isReviewWindow(new Date()) && !(reviewEntry && (reviewEntry.doneAt || reviewEntry.skippedAt));
+  function skipReview() {
+    setState(s => ({ ...s, reviews: { ...s.reviews, weekly: { ...(s.reviews?.weekly || {}), [reviewWeek.weekId]: { skippedAt: Date.now() } } } }));
+    showToast('Pas cette semaine. Aucun souci.');
+  }
+  function finishReview({ mattered, focus, extra }) {
+    setState(s => {
+      const next = {
+        ...s,
+        reviews: { ...s.reviews, weekly: { ...(s.reviews?.weekly || {}), [reviewWeek.weekId]: { mattered, doneAt: Date.now() } } },
+        weeklyFocus: { ...(s.weeklyFocus || {}) },
+      };
+      if (focus) next.weeklyFocus[reviewWeek.nextWeekId] = focus; else delete next.weeklyFocus[reviewWeek.nextWeekId];
+      return applyReviewExtras(next, extra || {});
+    });
+    setShowReview(false);
+    showToast('Point fait. Bonne semaine.');
+  }
+  // Point d'extension pour les écrans ajoutés au rituel (focale mensuelle — lot suivant)
+  function applyReviewExtras(s, extra) { return s; }
+  // « Ça m'a échappé » → une petite tâche liée au cap, casée au début de la semaine qui vient
+  function addNudgeTask(capId, title) {
+    const date = todayISO() < reviewWeek.nextMonday ? reviewWeek.nextMonday : todayISO();
+    addItem({ title, capId, priority: 'must', date, duration: { weeks: 0, days: 0, hours: 0, minutes: 15 } });
+    showToast(`« ${title} » casée le ${formatDate(date)}.`);
+  }
+  // Focus de la semaine en cours (posé au rituel précédent)
+  const currentFocus = (state.weeklyFocus || {})[currentFocusWeekId(new Date())] || null;
+  const currentFocusLabel = currentFocus ? ((currentFocus.capId && capDirectLabel(state.caps || [], currentFocus.capId)) || currentFocus.text || null) : null;
 
   // Compte les caps "actifs" pour le warning soft de surinvestissement (objectifs racine)
   const activeObjectiveCount = (state.caps || []).filter(o => o.status === 'active').length;
@@ -3740,6 +3873,11 @@ function CapApp({ session }) {
       }
       const minutes = effectiveDurationMinutes(i);
       if (minutes && minutes <= 15) score += 15;
+      // V4 4a.3 : léger coup de pouce aux tâches rattachées au focus de la semaine (lignée comprise)
+      if (currentFocus?.capId && i.capId) {
+        const path = capPathById(state.caps || [], i.capId);
+        if (path && path.some(n => n.id === currentFocus.capId)) score += 40;
+      }
       return { item: i, score };
     });
     scored.sort((a, b) => b.score - a.score);
@@ -4077,6 +4215,7 @@ function CapApp({ session }) {
               <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
                 {todayCapacity && <span> · {ENERGY_PRESETS.find(p => p.id === todayCapacity.mode)?.emoji || '⚓'} {todayCapacity.hours}h</span>}
+                {currentFocusLabel && <span className="focus-chip" title="Le focus que tu as posé pour cette semaine" onClick={() => setView('caps')}>✦ Cette semaine : {currentFocusLabel.length > 32 ? currentFocusLabel.slice(0, 32) + '…' : currentFocusLabel}</span>}
               </div>
               {/* Le logo 2A tient lieu de titre — le mot « Cap » reste pour les lecteurs d'écran. */}
               <h1 style={{ display: 'flex', alignItems: 'center', margin: 0, lineHeight: 1 }}>
@@ -4169,6 +4308,7 @@ function CapApp({ session }) {
               filters={filters} setFilters={setFilters}
               categories={state.categories}
             />
+            {showReviewInvite && <WeeklyReviewInvite onOpen={() => setShowReview(true)} onSkip={skipReview} />}
             {upcomingImportant.length > 0 && (
               <RdvBanner rdvs={upcomingImportant} categories={state.categories} todayIso={todayIso} onEdit={(it, occDate) => { setEditingOccurrenceDate(occDate || null); setEditingItem(it); }} />
             )}
@@ -4278,6 +4418,7 @@ function CapApp({ session }) {
         }}><BoussoleCapCtx.Provider value={{ lowMode: lowModeOn, onDecision: recordCapDecision }}><BoussoleView
           lowMode={state.lowMode}
           onSetLowMode={setLowMode}
+          onOpenReview={() => setShowReview(true)}
           caps={state.caps || []}
           visions={state.visions || []}
           items={state.items}
@@ -4466,6 +4607,9 @@ function CapApp({ session }) {
       )}
       {showSuggestion && <SuggestionModal task={suggestedTask} categories={state.categories} onClose={() => setShowSuggestion(false)} onFocus={(id) => { setShowSuggestion(false); setFocusMode(id); }} onStart={(id) => { setShowSuggestion(false); startTask(id); setFocusMode(id); }} />}
       {showCheckin && <CheckinModal currentMode={todayCapacity?.mode} onClose={() => setShowCheckin(false)} onSelect={(preset, hours) => { setState(s => ({ ...s, capacity: { ...s.capacity, [today]: { mode: preset, hours } } })); setShowCheckin(false); }} />}
+      {showReview && <WeeklyReviewModal state={state} lowMode={lowModeOn} week={reviewWeek}
+        onClose={() => setShowReview(false)} onFinish={finishReview}
+        onCapDecision={recordCapDecision} onSetCapStatus={setCapStatus} onUpdateCap={updateCap} onAddNudgeTask={addNudgeTask} />}
       {showSettings && <SettingsModal settings={state.settings} categories={state.categories} userEmail={userEmail} onClose={() => setShowSettings(false)} onSave={(newSettings) => setState(s => ({ ...s, settings: newSettings }))} onUpdateCategories={(cats) => setState(s => ({ ...s, categories: cats }))} onDeleteAccount={handleDeleteAccount} />}
     </div>
   );
@@ -7566,7 +7710,7 @@ function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast,
   );
 }
 
-function BoussoleView({ lowMode, onSetLowMode, caps, visions, items, categories, activeObjectiveCount, onAddObjective, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddVision, onUpdateVision, onDeleteVision, onAddTaskToCap, onLinkTaskToCap, onEditTask, onToggleTask }) {
+function BoussoleView({ lowMode, onSetLowMode, onOpenReview, caps, visions, items, categories, activeObjectiveCount, onAddObjective, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddVision, onUpdateVision, onDeleteVision, onAddTaskToCap, onLinkTaskToCap, onEditTask, onToggleTask }) {
   const tasksByCap = useMemo(() => {
     const m = {};
     flattenItems(items).forEach(it => { if (it.capId) { (m[it.capId] = m[it.capId] || []).push(it); } });
@@ -7594,6 +7738,7 @@ function BoussoleView({ lowMode, onSetLowMode, caps, visions, items, categories,
           <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: 'var(--ink-muted)' }}>Est-ce que ce que je fais m'amène où je veux ?</p>
         </div>
         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          <button className="cap-btn-mini" title="Le rituel hebdo : ce qui a compté, où en sont tes projets, ce qui compte ensuite" onClick={onOpenReview}>Point de la semaine</button>
           {!lowMode?.on && <button className="cap-btn-mini" title="Coupe toute question, rythme et relance. Les caps dorment en silence." onClick={() => onSetLowMode(true)}>Période de pause</button>}
           <button className="btn btn-rust" onClick={onAddObjective}><IconPlus size={14} /> Objectif</button>
         </div>
@@ -7656,6 +7801,183 @@ function BoussoleView({ lowMode, onSetLowMode, caps, visions, items, categories,
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// V4 4a.3 : invitation discrète au rituel (jamais de popup). Sautable, pas de streak.
+function WeeklyReviewInvite({ onOpen, onSkip }) {
+  return (
+    <div className="review-invite">
+      <div>
+        <div className="display" style={{ fontSize: '1.05rem', fontStyle: 'italic', fontWeight: 500 }}>Ton point de la semaine</div>
+        <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)' }}>Trois questions, trois minutes. Ce qui a compté, où en sont tes projets, ce qui compte ensuite.</div>
+      </div>
+      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+        <button className="btn btn-rust" onClick={onOpen}>Ouvrir</button>
+        <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={onSkip}>pas cette semaine</button>
+      </div>
+    </div>
+  );
+}
+
+// V4 4a.3 : le rituel hebdo unique. Ordre non négociable : doux → qui-pique → souveraineté.
+// Chaque écran est sautable ; rien n'est obligatoire. Le mode bas régime retire l'écran 2.
+function WeeklyReviewModal({ state, lowMode, week, extraSteps = [], onClose, onFinish, onCapDecision, onSetCapStatus, onUpdateCap, onAddNudgeTask }) {
+  const existing = (state.reviews?.weekly || {})[week.weekId] || {};
+  const [step, setStep] = useState(0);
+  const [mattered, setMattered] = useState(existing.mattered || '');
+  const prevFocus = (state.weeklyFocus || {})[week.nextWeekId] || {};
+  const [focusCapId, setFocusCapId] = useState(prevFocus.capId || '');
+  const [focusText, setFocusText] = useState(prevFocus.text || '');
+  const [answered, setAnswered] = useState({}); // capId → libellé de la réponse donnée pendant ce rituel
+  const [nudgeFor, setNudgeFor] = useState(null);
+  const [nudgeTitle, setNudgeTitle] = useState('');
+  const [extraData, setExtraData] = useState({});
+
+  const caps = state.caps || [];
+  const items = state.items || [];
+  const all = useMemo(() => flattenItems(items), [items]);
+  const startTs = isoToDate(week.range.start).getTime();
+  const endTs = isoToDate(addDays(week.range.end, 1)).getTime();
+  const doneTasks = all.filter(i => i.completedAt && i.completedAt >= startTs && i.completedAt < endTs);
+  let routineChecks = 0;
+  all.forEach(i => {
+    if (!(i.recurrence || i.streak)) return;
+    for (let d = week.range.start; d <= week.range.end; d = addDays(d, 1)) if (isOccurrenceCompleted(i, d)) routineChecks++;
+  });
+  const intentions = Object.entries(state.dailyIntentions || {}).filter(([d, t]) => d >= week.range.start && d <= week.range.end && t).sort();
+  // Figés à l'ouverture : les réponses ne font pas « sauter » la liste. Un projet déjà
+  // interrogé sur son rythme n'est pas re-questionné comme zombie (une question suffit).
+  const concerns = useMemo(() => findPaceConcerns(caps), []);
+  const zombies = useMemo(() => { const seen = new Set(concerns.map(c => c.node.id)); return findZombieCaps(caps, items).filter(z => !seen.has(z.node.id)); }, []);
+  const objectivesWithWhy = caps.filter(o => o.status === 'active' && o.why);
+  const capOptions = activeCapOptions(caps);
+
+  const steps = ['mattered', ...(lowMode ? [] : ['projects']), 'next', ...extraSteps.map(e => e.key)];
+  const cur = steps[step];
+  const isLast = step === steps.length - 1;
+  const mark = (id, label) => setAnswered(a => ({ ...a, [id]: label }));
+  const finish = () => onFinish({ mattered: mattered.trim(), focus: (focusCapId || focusText.trim()) ? { capId: focusCapId || null, text: focusText.trim() } : null, extra: extraData });
+
+  const titles = { mattered: "Qu'est-ce qui a compté cette semaine ?", projects: 'Où en sont tes projets ?', next: 'La semaine qui vient, qu\'est-ce qui compte ?' };
+  extraSteps.forEach(e => { titles[e.key] = e.title; });
+
+  const answerRow = (id, buttons) => answered[id]
+    ? <div style={{ fontSize: '0.78rem', color: 'var(--moss)', marginTop: '0.35rem' }}>✓ {answered[id]}</div>
+    : <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>{buttons}</div>;
+
+  return (
+    <div className="modal-bg">{/* pas de fermeture au clic sur le fond : on ne perd pas ce qui a été écrit */}
+      <div className="modal review-modal" onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.3rem' }}>
+          <div className="mono" style={{ fontSize: '0.65rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-muted)' }}>
+            Point de la semaine · {step + 1}/{steps.length}
+          </div>
+          <button className="btn-ghost" style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: '0.3rem' }} onClick={onClose}><IconX size={18} /></button>
+        </div>
+        <h2 className="display" style={{ margin: '0 0 1rem', fontSize: '1.4rem', fontWeight: 500, fontStyle: 'italic' }}>{titles[cur]}</h2>
+
+        {cur === 'mattered' && (
+          <div>
+            <div className="review-facts">
+              <span>{doneTasks.length} tâche{doneTasks.length > 1 ? 's' : ''} bouclée{doneTasks.length > 1 ? 's' : ''}</span>
+              <span>{routineChecks} routine{routineChecks > 1 ? 's' : ''} cochée{routineChecks > 1 ? 's' : ''}</span>
+            </div>
+            {doneTasks.length > 0 && (
+              <ul className="review-list">
+                {doneTasks.slice(0, 8).map(t => {
+                  const lab = t.capId ? capDirectLabel(caps, t.capId) : null;
+                  return <li key={t.id}>{t.title}{lab && <span className="chip chip-cap" style={{ marginLeft: '0.4rem' }}><IconCompass size={9} />{lab}</span>}</li>;
+                })}
+                {doneTasks.length > 8 && <li style={{ color: 'var(--ink-fog)' }}>… et {doneTasks.length - 8} autres</li>}
+              </ul>
+            )}
+            {intentions.length > 0 && (
+              <div style={{ margin: '0.6rem 0' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', marginBottom: '0.2rem' }}>Tes intentions du jour :</div>
+                {intentions.map(([d, t]) => <div key={d} style={{ fontSize: '0.8rem', color: 'var(--ink-soft)', fontStyle: 'italic' }}>{formatDate(d)} — {t}</div>)}
+              </div>
+            )}
+            <textarea className="input" rows={3} placeholder="En quelques mots, si tu veux. Rien n'est obligatoire." value={mattered} onChange={e => setMattered(e.target.value)} style={{ marginTop: '0.5rem', resize: 'vertical' }} />
+          </div>
+        )}
+
+        {cur === 'projects' && (
+          <div>
+            {objectivesWithWhy.length > 0 && (
+              <div style={{ marginBottom: '0.9rem' }}>
+                <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', marginBottom: '0.25rem' }}>Pour rappel, pourquoi tu fais tout ça :</div>
+                {objectivesWithWhy.map(o => <div key={o.id} style={{ fontSize: '0.82rem', marginBottom: '0.15rem' }}><strong>{o.title}</strong> — <span className="cap-why" style={{ display: 'inline' }}>{o.why}</span></div>)}
+              </div>
+            )}
+            {concerns.length === 0 && zombies.length === 0 && (
+              <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)', padding: '0.5rem 0' }}>Rien ne réclame ton attention côté projets. Ça roule.</div>
+            )}
+            {concerns.map(c => (
+              <div key={c.node.id} className="cap-question" style={{ marginTop: '0.5rem' }}>
+                <div style={{ fontSize: '0.82rem' }}><strong>{c.node.title}</strong> <span style={{ color: 'var(--ink-muted)' }}>({c.parent.title})</span> — {c.pace === 'still' ? "rien n'a bougé alors qu'un jalon est passé." : 'un jalon attend.'}</div>
+                {c.overdue.map(m => (
+                  <div key={m.id} style={{ marginTop: '0.4rem', paddingLeft: '0.6rem', borderLeft: '2px dotted var(--line)' }}>
+                    <div style={{ fontSize: '0.8rem' }}>⚑ {m.title} <span style={{ color: 'var(--ink-muted)' }}>· prévu le {formatDate(m.deadline)}</span> — il en est où ?</div>
+                    {answerRow(m.id, <>
+                      <button className="cap-btn-mini" style={{ borderColor: 'var(--moss)', color: 'var(--moss)' }} onClick={() => { onSetCapStatus(m.id, 'reached'); mark(m.id, 'franchi'); }}>Franchi</button>
+                      <button className="cap-btn-mini" onClick={() => { const nd = addDays(todayISO(), 14); onCapDecision(m.id, { trigger: 'pace', answer: 'postpone', forDeadline: m.deadline }, { deadline: nd }); mark(m.id, `repoussé au ${formatDate(nd)}`); }}>Repousser de 2 semaines</button>
+                      <button className="cap-btn-mini" onClick={() => { onCapDecision(m.id, { trigger: 'pace', answer: 'escaped', forDeadline: m.deadline }); setNudgeFor(c.node); setNudgeTitle(''); mark(m.id, "ça t'a échappé — rien de grave"); }}>Ça m'a échappé</button>
+                      <button className="cap-btn-mini" onClick={() => { onCapDecision(m.id, { trigger: 'pace', answer: 'drop', forDeadline: m.deadline }); onSetCapStatus(m.id, 'abandoned'); mark(m.id, 'lâché — une décision, pas un échec'); }}>Ça ne compte plus</button>
+                    </>)}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {zombies.map(z => (
+              <div key={z.node.id} className="cap-question" style={{ marginTop: '0.5rem' }}>
+                <div style={{ fontSize: '0.82rem' }}><strong>{z.node.title}</strong>{z.parent && <span style={{ color: 'var(--ink-muted)' }}> ({z.parent.title})</span>} — rien n'a bougé depuis trois semaines. Pause assumée, ou perte de sens ?</div>
+                {answerRow(z.node.id, <>
+                  <button className="cap-btn-mini" onClick={() => { onCapDecision(z.node.id, { trigger: 'zombie', answer: 'pause' }); onSetCapStatus(z.node.id, 'paused'); mark(z.node.id, 'en pause, assumée'); }}>Pause assumée</button>
+                  <button className="cap-btn-mini" onClick={() => { onCapDecision(z.node.id, { trigger: 'zombie', answer: 'escaped' }); setNudgeFor(z.node); setNudgeTitle(''); mark(z.node.id, "ça t'a échappé — on s'y remet doucement"); }}>Ça m'a échappé</button>
+                  <button className="cap-btn-mini" onClick={() => { onCapDecision(z.node.id, { trigger: 'zombie', answer: 'drop' }); onSetCapStatus(z.node.id, 'abandoned'); mark(z.node.id, 'lâché — une décision, pas un échec'); }}>Ça ne compte plus</button>
+                </>)}
+              </div>
+            ))}
+            {nudgeFor && (
+              <div className="review-nudge">
+                <div style={{ fontSize: '0.8rem', marginBottom: '0.35rem' }}>Une petite chose pour te remettre sur « {nudgeFor.title} » la semaine prochaine ?</div>
+                <div style={{ display: 'flex', gap: '0.35rem' }}>
+                  <input className="input" autoFocus placeholder="Ex. : relire mes notes 15 min" value={nudgeTitle} onChange={e => setNudgeTitle(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && nudgeTitle.trim()) { onAddNudgeTask(nudgeFor.id, nudgeTitle.trim()); setNudgeFor(null); } }} />
+                  <button className="cap-btn-mini" disabled={!nudgeTitle.trim()} onClick={() => { onAddNudgeTask(nudgeFor.id, nudgeTitle.trim()); setNudgeFor(null); }}>Caser</button>
+                  <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => setNudgeFor(null)}>non merci</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {cur === 'next' && (
+          <div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--ink-muted)', marginBottom: '0.6rem' }}>Une seule chose. Celle qui, si elle avance, rend la semaine réussie.</div>
+            {capOptions.length > 0 && (
+              <select className="input" value={focusCapId} onChange={e => setFocusCapId(e.target.value)} style={{ marginBottom: '0.5rem' }}>
+                <option value="">— pas un cap en particulier —</option>
+                {capOptions.map(o => <option key={o.id} value={o.id}>{'  '.repeat(o.depth)}{o.label}</option>)}
+              </select>
+            )}
+            <input className="input" placeholder={focusCapId ? 'Précision (facultatif)' : 'En quelques mots (facultatif)'} value={focusText} onChange={e => setFocusText(e.target.value)} />
+          </div>
+        )}
+
+        {extraSteps.map(e => cur === e.key && <div key={e.key}>{e.render(extraData[e.key] || {}, v => setExtraData(d => ({ ...d, [e.key]: { ...(d[e.key] || {}), ...v } })))}</div>)}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.4rem', gap: '0.5rem' }}>
+          <button className="cap-btn-mini" disabled={step === 0} onClick={() => setStep(s => s - 1)}>← retour</button>
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
+            {!isLast && <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => setStep(s => s + 1)}>passer</button>}
+            {!isLast && <button className="btn btn-rust" onClick={() => setStep(s => s + 1)}>Suivant</button>}
+            {isLast && <button className="btn btn-rust" onClick={finish}>Terminer</button>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
