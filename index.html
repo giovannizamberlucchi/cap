@@ -168,6 +168,17 @@ html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink);
 }
 .cap-linked-task:hover { color: var(--ink); }
 .cap-linked-task.done { opacity: 0.5; text-decoration: line-through; }
+/* ===== V4 4a.2 — confrontation (question, jamais verdict) ===== */
+.cap-pace { color: var(--ink-muted); font-style: italic; }
+.cap-question {
+  margin-top: 0.6rem; padding: 0.6rem 0.75rem; border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-fog); background: var(--paper-2); border-radius: 3px; color: var(--ink-soft);
+}
+.cap-lowmode {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+  font-size: 0.8rem; color: var(--ink-soft); background: var(--paper-2);
+  border: 1px dashed var(--line); border-radius: 3px; padding: 0.55rem 0.75rem; margin-bottom: 0.9rem;
+}
 
 @keyframes deadlinePulse {
   0%, 100% { opacity: 1; }
@@ -714,6 +725,8 @@ const CapsContext = React.createContext({ caps: [], onOpenCap: null });
 // V4 4a.1+ : contexte fournissant à la Boussole les handlers de TaskCard (réordo/imbrication/etc.)
 // pour que les tâches liées se comportent exactement comme dans la vue Priorités.
 const BoussoleTaskCtx = React.createContext(null);
+// V4 4a.2 : opérations de confrontation (pace, question d'échéance, bas régime) pour CapNode récursif
+const BoussoleCapCtx = React.createContext({ lowMode: false });
 
 // ============ SUPABASE CONFIG ============
 const SUPABASE_URL = 'https://hrsdzqwgpklzqvhltowz.supabase.co';
@@ -2081,7 +2094,7 @@ function findOverdueRoots(items, todayIso) {
 }
 
 // ============ MIGRATION SCHEMA V3 ============
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 function migrateItem(item) {
   // Type recurring → task avec recurrence quotidienne par défaut
@@ -2156,6 +2169,17 @@ function migrateItem(item) {
   };
 }
 
+// V4 4a.2 (schema v11) : horodatages de statut + journal des décisions sur chaque cap
+function migrateCap(node) {
+  return {
+    ...node,
+    reachedAt: node.reachedAt !== undefined ? node.reachedAt : null,
+    statusChangedAt: node.statusChangedAt !== undefined ? node.statusChangedAt : null,
+    decisions: Array.isArray(node.decisions) ? node.decisions : [],
+    children: (node.children || []).map(migrateCap),
+  };
+}
+
 function migrateState(state) {
   if (state.schemaVersion >= SCHEMA_VERSION) return state;
   return {
@@ -2163,10 +2187,31 @@ function migrateState(state) {
     items: (state.items || []).map(migrateItem),
     dailyIntentions: state.dailyIntentions || {},
     // V4 4a.1 : arbre des caps + visions (texte libre lié)
-    caps: state.caps || [],
+    caps: (state.caps || []).map(migrateCap),
     visions: state.visions || [],
+    // V4 4a.2 : mode bas régime (kill-switch de toute confrontation)
+    lowMode: state.lowMode || { on: false, since: null },
     schemaVersion: SCHEMA_VERSION,
   };
+}
+
+// Normalise un état chargé (local, cloud ou import). Les clés inconnues sont CONSERVÉES
+// (compatibilité ascendante : une version plus ancienne ne doit jamais effacer des données
+// qu'elle ne connaît pas encore).
+function normalizeLoadedState(raw) {
+  const r = raw || {};
+  return migrateState({
+    ...r,
+    items: r.items || [],
+    categories: r.categories || DEFAULT_CATEGORIES,
+    settings: { ...DEFAULT_SETTINGS, ...(r.settings || {}) },
+    capacity: r.capacity || {},
+    dailyIntentions: r.dailyIntentions || {},
+    caps: r.caps || [],
+    visions: r.visions || [],
+    lowMode: r.lowMode || { on: false, since: null },
+    schemaVersion: r.schemaVersion || 0,
+  });
 }
 
 // ============ DEFAULT STATE ============
@@ -2215,6 +2260,7 @@ function makeObjective(data = {}) {
     status: 'active',
     children: [],
     createdAt: Date.now(),
+    reachedAt: null, statusChangedAt: null, decisions: [],
   };
 }
 function makeCapNode(data = {}) {
@@ -2228,6 +2274,7 @@ function makeCapNode(data = {}) {
     status: 'active',
     children: [],
     createdAt: Date.now(),
+    reachedAt: null, statusChangedAt: null, decisions: [],
   };
 }
 
@@ -2324,6 +2371,36 @@ function capProgress(node) {
   return { done, total: kids.length };
 }
 
+// ============ CAPS — V4 4a.2 : pace + confrontation ============
+// Signal de pace, porté par les jalons DATÉS (enfants directs), jamais de tracking d'heures.
+// Ne s'applique qu'aux projets/jalons (depth ≥ 1) — jamais aux objectifs ni à la vision.
+// Retourne null si aucun jalon daté (pas de fausse précision), sinon :
+//   'still'  : rien n'a bougé alors qu'une échéance est passée
+//   'behind' : un jalon échu attend encore
+//   'ahead'  : au moins un jalon franchi avant sa date, rien d'échu en attente
+//   'ok'     : ça colle au calendrier
+function capPace(node, today = todayISO()) {
+  const dated = (node.children || []).filter(c => c.deadline && c.status !== 'abandoned');
+  if (!dated.length) return null;
+  const overdueOpen = dated.filter(c => c.status === 'active' && c.deadline < today);
+  const reached = (node.children || []).filter(c => c.status === 'reached');
+  if (overdueOpen.length && !reached.length) return 'still';
+  if (overdueOpen.length) return 'behind';
+  const early = dated.filter(c => c.status === 'reached' && c.reachedAt && dateToISO(new Date(c.reachedAt)) < c.deadline);
+  if (early.length) return 'ahead';
+  return 'ok';
+}
+const PACE_LABELS = { still: 'rien n\'a bougé', behind: 'un jalon attend', ok: 'ça colle', ahead: 'en avance' };
+
+// La question « échéance passée » est-elle due sur ce nœud ? (projet/jalon actif, deadline dépassée,
+// pas encore de réponse pour CETTE échéance ; « plus tard » la fait taire 7 jours)
+const CAP_LATER_MS = 7 * 24 * 3600 * 1000;
+function capDeadlineQuestionDue(node, depth, today = todayISO(), now = Date.now()) {
+  if (depth < 1 || node.status !== 'active' || !node.deadline || node.deadline >= today) return false;
+  return !(node.decisions || []).some(d => d.trigger === 'deadline' && d.forDeadline === node.deadline
+    && (d.answer !== 'later' || now - d.at < CAP_LATER_MS));
+}
+
 // ============ MAIN APP ============
 function CapApp({ session }) {
   const userId = session.user.id;
@@ -2335,20 +2412,10 @@ function CapApp({ session }) {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_USER);
       if (raw) {
-        const saved = JSON.parse(raw);
-        return migrateState({
-          items: saved.items || [],
-          categories: saved.categories || DEFAULT_CATEGORIES,
-          settings: { ...DEFAULT_SETTINGS, ...(saved.settings || {}) },
-          capacity: saved.capacity || {},
-          dailyIntentions: saved.dailyIntentions || {},
-          caps: saved.caps || [],
-          visions: saved.visions || [],
-          schemaVersion: saved.schemaVersion || 0,
-        });
+        return normalizeLoadedState(JSON.parse(raw));
       }
     } catch {}
-    return { items: [], categories: DEFAULT_CATEGORIES, settings: DEFAULT_SETTINGS, capacity: {}, dailyIntentions: {}, caps: [], visions: [], schemaVersion: SCHEMA_VERSION };
+    return normalizeLoadedState({ schemaVersion: SCHEMA_VERSION });
   });
 
   const [cloudStatus, setCloudStatus] = useState('idle'); // idle | loading | syncing | synced | error
@@ -2421,16 +2488,7 @@ function CapApp({ session }) {
   }, [state.settings.theme]);
 
   // Adoption d'un état cloud → état local (helper commun load + résolution de conflit)
-  const adoptCloud = (cloudData) => migrateState({
-    items: cloudData.items || [],
-    categories: cloudData.categories || DEFAULT_CATEGORIES,
-    settings: { ...DEFAULT_SETTINGS, ...(cloudData.settings || {}) },
-    capacity: cloudData.capacity || {},
-    dailyIntentions: cloudData.dailyIntentions || {},
-    caps: cloudData.caps || [],
-    visions: cloudData.visions || [],
-    schemaVersion: cloudData.schemaVersion || 0,
-  });
+  const adoptCloud = (cloudData) => normalizeLoadedState(cloudData);
 
   // Sauvegarde cloud robuste (CAS), partagée par le debounce et le flush.
   const doCloudSave = async () => {
@@ -3153,7 +3211,8 @@ function CapApp({ session }) {
   function setCapStatus(id, status) {
     const node = findCapNode(state.caps || [], id);
     if (!node) return;
-    updateCap(id, { status });
+    const now = Date.now();
+    updateCap(id, { status, statusChangedAt: now, reachedAt: status === 'reached' ? now : null });
     if (status === 'reached') {
       const path = capPathById(state.caps || [], id);
       const depth = path ? path.length - 1 : 0;
@@ -3166,6 +3225,19 @@ function CapApp({ session }) {
       showToast('Cap mis en pause. Il dort, sans culpabilité.');
     }
   }
+  // V4 4a.2 : consigne une réponse à une question de confrontation (+ patch éventuel du cap)
+  function recordCapDecision(id, decision, patch = {}) {
+    const node = findCapNode(state.caps || [], id);
+    if (!node) return;
+    updateCap(id, { ...patch, decisions: [...(node.decisions || []), { at: Date.now(), ...decision }] });
+  }
+  // V4 4a.2 : mode bas régime — coupe toute confrontation, pace et nudge
+  function setLowMode(on) {
+    setState(s => ({ ...s, lowMode: { on, since: on ? todayISO() : null } }));
+    showToast(on ? 'Période de pause. Les caps dorment en silence — aucune question tant que tu ne reprends pas.' : 'Reprise. La Boussole reparle, doucement.');
+  }
+  const lowModeOn = !!(state.lowMode && state.lowMode.on);
+
   // Compte les caps "actifs" pour le warning soft de surinvestissement (objectifs racine)
   const activeObjectiveCount = (state.caps || []).filter(o => o.status === 'active').length;
 
@@ -3744,7 +3816,7 @@ function CapApp({ session }) {
         const data = JSON.parse(ev.target.result);
         if (data.items && Array.isArray(data.items)) {
           if (confirm(`Importer ${data.items.length} items ? Tes données actuelles seront remplacées.`)) {
-            setState(prev => ({ ...prev, ...data }));
+            setState(prev => normalizeLoadedState({ ...prev, ...data, schemaVersion: data.schemaVersion || 0 }));
           }
         }
       } catch { alert('Fichier invalide.'); }
@@ -4203,7 +4275,9 @@ function CapApp({ session }) {
           runningId: running?.itemId,
           selectedId: selectedItemId,
           onSelect: setSelectedItemId,
-        }}><BoussoleView
+        }}><BoussoleCapCtx.Provider value={{ lowMode: lowModeOn, onDecision: recordCapDecision }}><BoussoleView
+          lowMode={state.lowMode}
+          onSetLowMode={setLowMode}
           caps={state.caps || []}
           visions={state.visions || []}
           items={state.items}
@@ -4222,7 +4296,7 @@ function CapApp({ session }) {
           onLinkTaskToCap={linkTaskToCap}
           onEditTask={(it) => setEditingItem(it)}
           onToggleTask={toggleComplete}
-        /></BoussoleTaskCtx.Provider>}
+        /></BoussoleCapCtx.Provider></BoussoleTaskCtx.Provider>}
 
         {view === 'archive' && (
           <ArchiveView
@@ -7320,9 +7394,54 @@ function VisionEditor({ vision, onUpdate, onDelete }) {
   );
 }
 
+// V4 4a.2 : échéance d'un projet/jalon passée → l'app DEMANDE (jamais de « retard » sur un cap).
+// Question + options + souveraineté. Chaque réponse est consignée dans node.decisions.
+function CapDeadlineQuestion({ node, kind, onEditCap, onSetStatus }) {
+  const capOps = React.useContext(BoussoleCapCtx);
+  const [mode, setMode] = useState(null); // null | 'postpone' | 'file'
+  const [newDate, setNewDate] = useState(addDays(todayISO(), 14));
+  const decide = (answer, patch) => capOps.onDecision(node.id, { trigger: 'deadline', forDeadline: node.deadline, answer }, patch);
+  const noun = kind === 'milestone' ? 'ce jalon' : 'ce projet';
+  const doneLabel = kind === 'milestone' ? 'Franchi, en fait' : 'Terminé, en fait';
+  return (
+    <div className="cap-question">
+      <div style={{ fontSize: '0.82rem', marginBottom: '0.45rem' }}>
+        L'échéance du {formatDate(node.deadline)} est passée. Tu en fais quoi, de {noun} ?
+      </div>
+      {mode === null && (
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <button className="cap-btn-mini" onClick={() => setMode('postpone')}>Repousser</button>
+          <button className="cap-btn-mini" onClick={() => { decide('reduce'); onEditCap(); }}>Réduire le livrable</button>
+          <button className="cap-btn-mini" onClick={() => setMode('file')}>Classer</button>
+          <span style={{ flex: 1 }} />
+          <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => decide('later')}>plus tard</button>
+        </div>
+      )}
+      {mode === 'postpone' && (
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <input type="date" className="input" style={{ width: 'auto', padding: '0.25rem 0.4rem', fontSize: '0.8rem' }} value={newDate} min={todayISO()} onChange={e => setNewDate(e.target.value)} />
+          <button className="cap-btn-mini" disabled={!newDate} onClick={() => decide('postpone', { deadline: newDate })}>OK</button>
+          <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => setMode(null)}>annuler</button>
+        </div>
+      )}
+      {mode === 'file' && (
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <button className="cap-btn-mini" style={{ borderColor: 'var(--moss)', color: 'var(--moss)' }} onClick={() => { decide('file-reached'); onSetStatus(node.id, 'reached'); }}>{doneLabel}</button>
+          <button className="cap-btn-mini" onClick={() => { decide('file-paused'); onSetStatus(node.id, 'paused'); }}>En pause</button>
+          <button className="cap-btn-mini" onClick={() => { decide('file-abandoned'); onSetStatus(node.id, 'abandoned'); }}>Ça ne compte plus</button>
+          <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => setMode(null)}>annuler</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddTaskToCap, onEditTask, onToggleTask }) {
   const kind = capDisplayKind(depth); // objective | project | milestone
   const taskOps = React.useContext(BoussoleTaskCtx); // handlers TaskCard (réordo/imbrication identiques à Priorités)
+  const capOps = React.useContext(BoussoleCapCtx); // V4 4a.2
+  const pace = (depth >= 1 && !capOps.lowMode && node.status === 'active') ? capPace(node) : null;
+  const askDeadline = !capOps.lowMode && capDeadlineQuestionDue(node, depth);
   const [collapsed, setCollapsed] = useState(false);
   const [showTasks, setShowTasks] = useState(true);
   const prog = capProgress(node);
@@ -7378,7 +7497,10 @@ function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast,
           <span className="chip" style={{ color: 'var(--ink-soft)' }}>{reached ? '✓ atteint' : '○ pas encore'}</span>
         )}
         {vision && <span className="chip chip-cap" title="Vision rattachée"><IconCompass size={10} />{(vision.text.split('\n')[0] || 'Vision').slice(0, 24)}</span>}
+        {pace && <span className="chip cap-pace" title="Rythme : l'état des jalons comparé à leurs dates. Une indication, pas un verdict.">Rythme · {PACE_LABELS[pace]}</span>}
       </div>
+
+      {askDeadline && <CapDeadlineQuestion node={node} kind={kind} onEditCap={() => onEditCap(node, depth)} onSetStatus={onSetStatus} />}
 
       {/* action row */}
       {!dormant && (
@@ -7444,7 +7566,7 @@ function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast,
   );
 }
 
-function BoussoleView({ caps, visions, items, categories, activeObjectiveCount, onAddObjective, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddVision, onUpdateVision, onDeleteVision, onAddTaskToCap, onLinkTaskToCap, onEditTask, onToggleTask }) {
+function BoussoleView({ lowMode, onSetLowMode, caps, visions, items, categories, activeObjectiveCount, onAddObjective, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddVision, onUpdateVision, onDeleteVision, onAddTaskToCap, onLinkTaskToCap, onEditTask, onToggleTask }) {
   const tasksByCap = useMemo(() => {
     const m = {};
     flattenItems(items).forEach(it => { if (it.capId) { (m[it.capId] = m[it.capId] || []).push(it); } });
@@ -7471,8 +7593,18 @@ function BoussoleView({ caps, visions, items, categories, activeObjectiveCount, 
           <h2 className="display" style={{ margin: 0, fontSize: '1.6rem', fontWeight: 500, fontStyle: 'italic' }}>Boussole</h2>
           <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: 'var(--ink-muted)' }}>Est-ce que ce que je fais m'amène où je veux ?</p>
         </div>
-        <button className="btn btn-rust" onClick={onAddObjective}><IconPlus size={14} /> Objectif</button>
+        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          {!lowMode?.on && <button className="cap-btn-mini" title="Coupe toute question, rythme et relance. Les caps dorment en silence." onClick={() => onSetLowMode(true)}>Période de pause</button>}
+          <button className="btn btn-rust" onClick={onAddObjective}><IconPlus size={14} /> Objectif</button>
+        </div>
       </div>
+
+      {lowMode?.on && (
+        <div className="cap-lowmode">
+          <span>🌙 Période de pause{lowMode.since ? ` depuis le ${formatDate(lowMode.since)}` : ''}. Pas de questions, pas de rythme affiché : les caps dorment en silence.</span>
+          <button className="cap-btn-mini" onClick={() => onSetLowMode(false)}>Reprendre</button>
+        </div>
+      )}
 
       {activeObjectiveCount >= 3 && (
         <div style={{ fontSize: '0.78rem', color: 'var(--ochre)', background: 'rgba(196,135,41,0.1)', border: '1px solid var(--ochre)', borderRadius: '3px', padding: '0.5rem 0.7rem', marginBottom: '0.75rem' }}>
