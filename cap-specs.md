@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lot 1 en prod le 2026-09-23 · lot 2 (« Démarrer ») codé, en preview**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lots 1 et 2 en prod le 2026-09-23**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -571,7 +571,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lot 1 en prod, lots 2-8 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-2 en prod, lots 3-8 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -605,7 +605,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
   - Tri par échéance : case « Trier par échéance » (persistée `settings.sortByDeadline`) à côté de « Afficher les récurrentes » ; liste unique groupée En retard / Aujourd'hui / Cette semaine / Ce mois-ci / Plus tard / Sans échéance, étiquette de priorité par ligne. Échéance effective = la plus proche entre la tâche et ses sous-tâches ouvertes. Recherche et filtres s'appliquent. RDV importants exclus (ils vivent dans le bandeau).
   - Mode sombre : bouton « + Nouvelle » catégorie (fond blanc) corrigé, `.btn-ghost` transparent par défaut ; raccourcis 1/2/3 sur une ligne dans Réglages ; en-tête qui ne se tasse plus quand le badge RDV est long.
 
-### Lot 2 — S6 « Démarrer » ✅ codé (2026-09-23, en preview)
+### Lot 2 — S6 « Démarrer » ✅ en prod (2026-09-23)
 Spec d'origine : une seule action « Démarrer » ; plein écran par défaut, bascule mini-fenêtre ; tâche ≤ D (focus pomodoro) → démarre sur sa durée estimée, bilan estimé/réel ; tâche > D → tranches D → pause → … → reste.
 - **Cadrage validé** : bouton 🎯 « Mode focus » retiré (cartes + suggestion) ; « Quitter » remplacé par Réduire / Arrêter / Fini ; relance d'une tâche entamée sur le reste ; reste < 5 min fusionné ; bilan neutre + ressenti ; **ajout hors spec d'origine** : chrono sur heure de fin + session persistée localement.
 - **Bugs corrigés** : « Fini » en plein écran laissait tourner le chrono sans enregistrer le temps ; démarrer une autre tâche écrasait le chrono sans enregistrer son temps.
@@ -1033,7 +1033,7 @@ Session découpée en 4 lots, validés et codés successivement (schema 7 → 9)
 
 **En réserve (issu de cette session, non fait)** : lanes en vue semaine, halos prep/trajet alignés sur les lanes, reflow live des voisins pendant un resize.
 
-#### Session 6 — Refonte action Démarrer (→ V5 lot 2, codé)
+#### Session 6 — Refonte action Démarrer (→ V5 lot 2, en prod)
 - **Fusion Mode focus + Démarrer tâche → 1 seule action "Démarrer"**
 - **UX par défaut** : plein écran (mode focus actuel)
 - **Bascule** : bouton pour passer en mini-modale (mode actuel "tâche en cours" / bandeau)
