@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots), pas codée**. Schema version **13**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lot 1 codé sur la branche `claude/zealous-lovelace-lmedot`, en test sur preview**. Schema version **14** sur la branche (13 en prod).
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -572,7 +572,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (pas encore codé)
+## V5 — cadrage validé le 2026-09-23 (lot 1 codé, lots 2-8 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -588,7 +588,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 | 7 | Remplissage auto de la journée |
 | 8 | Import calendrier externe (Google) |
 
-### Lot 1 — S7 irritants (valeurs par défaut validées)
+### Lot 1 — S7 irritants ✅ codé (branche, en test)
 - **Date/heure passée à la création** : avertissement non bloquant ; jamais sur les routines (rattrapage).
 - **Trajet retour asymétrique** : champ retour séparé, prérempli avec l'aller.
 - **Badge « en retard de prep »** : reste visible en ocre jusqu'à l'heure du RDV.
@@ -596,6 +596,15 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 - **Pluriels** des labels streak ; **suppression des champs morts** `streakCount`, `graceDays`, `lastEvaluatedPeriod` (schema v14) ; **revue complète du mode sombre**.
 - **Tri par échéance** dans Priorités : bouton qui bascule sur une liste unique triée par deadline (les filtres Échéance ne font que filtrer les colonnes).
 - Onglet « Deadlines » : abandonné. Prep/trajet modifiés sur une occurrence qui touchent le template : laissé tel quel (rien remonté à l'usage).
+- **Implémentation** :
+  - Avertissement à la création (`warnOnCreate`, QuickAdd + modale complète) : fusionne l'info chevauchement et « ⏳ … est déjà passé — tâche créée quand même ». Jamais sur une tâche récurrente ni une routine. Pas à l'édition.
+  - Trajet retour : `travelReturnDuration` (null = identique à l'aller) ; case « 🔄 Trajet retour » toujours disponible, sélecteur prérempli avec l'aller, « Aucun » décoche. La couronne du RDV (agenda, chevauchements) utilise la durée retour.
+  - Badge en-tête : prep/départ dépassé mais RDV pas commencé → badge ocre « RDV HH:MM · … · préparation prévue à HH:MM, RDV dans X ».
+  - Archive : poubelle par tâche (annulable) + « Vider l'archive » (confirmation, annulable par Ctrl+Z / Annuler).
+  - Pluriels : « 1 jour / semaine / année de suite ».
+  - Schema **v14** : `streakCount`, `graceDays`, `lastEvaluatedPeriod` retirés à la migration et plus jamais écrits.
+  - Tri par échéance : case « Trier par échéance » (persistée `settings.sortByDeadline`) à côté de « Afficher les récurrentes » ; liste unique groupée En retard / Aujourd'hui / Cette semaine / Ce mois-ci / Plus tard / Sans échéance, étiquette de priorité par ligne. Échéance effective = la plus proche entre la tâche et ses sous-tâches ouvertes. Recherche et filtres s'appliquent. RDV importants exclus (ils vivent dans le bandeau).
+  - Mode sombre : bouton « + Nouvelle » catégorie (fond blanc) corrigé, `.btn-ghost` transparent par défaut ; raccourcis 1/2/3 sur une ligne dans Réglages ; en-tête qui ne se tasse plus quand le badge RDV est long.
 
 ### Lot 2 — S6 « Démarrer » (spec d'origine)
 Une seule action « Démarrer » ; plein écran par défaut, bascule mini-fenêtre ; tâche ≤ D (focus pomodoro) → démarre sur sa durée estimée, bilan estimé/réel ; tâche > D → tranches D → pause → … → reste.
