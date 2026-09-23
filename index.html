@@ -182,6 +182,17 @@ html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink);
 .quit-card { border: 1px solid var(--ink); padding: 1rem; background: var(--paper); border-radius: 3px; border-left: 4px solid var(--moss); }
 .toast .toast-feel { border-color: transparent; font-size: 0.95rem; padding: 0.05rem 0.3rem; }
 
+/* ===== V4 4c/4d — piliers & argent ===== */
+.active-mini { border-color: var(--ink) !important; color: var(--ink) !important; background: var(--paper-2) !important; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.6rem; margin-bottom: 1rem; }
+.stat-tile { border: 1px solid var(--line); background: var(--paper-2); border-radius: 4px; padding: 0.7rem 0.85rem; }
+.stat-label { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-muted); }
+.stat-value { font-family: var(--font-display); font-size: 1.35rem; font-weight: 600; color: var(--ink); margin-top: 0.15rem; }
+.stat-sub { font-size: 0.72rem; color: var(--ink-muted); margin-top: 0.1rem; }
+.money-form { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; padding: 0.6rem; border: 1px dashed var(--line); border-radius: 4px; }
+.money-list { margin-top: 0.8rem; border-top: 1px solid var(--line); }
+.money-line { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.2rem; border-bottom: 1px solid var(--line); font-size: 0.85rem; }
+
 /* ===== V4 4a.3 — rituel hebdo ===== */
 .review-invite {
   display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;
@@ -861,6 +872,7 @@ const IconUpload = (p) => <Icon {...p} d={<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 
 const IconSettings = (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></>} />;
 const IconSun = (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></>} />;
 const IconMoon = (p) => <Icon {...p} d={<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>} />;
+const IconScales = (p) => <Icon {...p} d={<><line x1="12" y1="3" x2="12" y2="21"/><line x1="5" y1="7" x2="19" y2="7"/><path d="M5 7l-3 7a3 3 0 0 0 6 0z"/><path d="M19 7l-3 7a3 3 0 0 0 6 0z"/><line x1="8" y1="21" x2="16" y2="21"/></>} />;
 const IconCompass = (p) => <Icon {...p} d={<><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></>} />;
 
 // ============ LOGO ============
@@ -2229,6 +2241,8 @@ function migrateState(state) {
     weeklyFocus: state.weeklyFocus || {},
     // V4 4b : ce que j'arrête (streak inversé : réussir = ne pas craquer)
     quits: state.quits || [],
+    // V4 4c : argent (opérations ponctuelles + flux récurrents)
+    money: state.money || { entries: [], flows: [] },
     schemaVersion: SCHEMA_VERSION,
   };
 }
@@ -2251,6 +2265,7 @@ function normalizeLoadedState(raw) {
     reviews: { weekly: {}, monthly: {}, ...(r.reviews || {}) },
     weeklyFocus: r.weeklyFocus || {},
     quits: r.quits || [],
+    money: { entries: [], flows: [], ...(r.money || {}) },
     schemaVersion: r.schemaVersion || 0,
   });
 }
@@ -3380,6 +3395,19 @@ function CapApp({ session }) {
   }
   const lowModeOn = !!(state.lowMode && state.lowMode.on);
 
+  // V4 4c : argent
+  function setMoney(fn) { setState(s => ({ ...s, money: fn({ entries: [], flows: [], ...(s.money || {}) }) })); }
+  const moneyProps = {
+    money: state.money,
+    onAddEntry: (e) => setMoney(m => ({ ...m, entries: [...m.entries, { id: generateId(), createdAt: Date.now(), ...e }] })),
+    onDeleteEntry: (id) => setMoney(m => ({ ...m, entries: m.entries.filter(e => e.id !== id) })),
+    onAddFlow: (f) => setMoney(m => ({ ...m, flows: [...m.flows, { id: generateId(), since: todayISO(), until: null, createdAt: Date.now(), ...f }] })),
+    onStopFlow: (id) => setMoney(m => ({ ...m, flows: m.flows.map(f => f.id === id ? { ...f, until: todayISO() } : f) })),
+    onDeleteFlow: (id) => { if (window.confirm('Supprimer ce flux et tout son historique ? (« arrêter » garde l\'historique)')) setMoney(m => ({ ...m, flows: m.flows.filter(f => f.id !== id) })); },
+  };
+
+  const fluxProps = {};
+
   // V4 4b : ce que j'arrête
   function addQuit({ title, pillars }) {
     setState(s => ({ ...s, quits: [...(s.quits || []), { id: generateId(), title, pillars: pillars || [], slips: [], createdAt: Date.now() }] }));
@@ -4362,6 +4390,7 @@ function CapApp({ session }) {
               <div className={`nav-tab ${view === 'calendar' ? 'active' : ''}`} onClick={() => setView('calendar')}><IconCalendar size={14} /> Agenda</div>
               <div className={`nav-tab ${view === 'caps' ? 'active' : ''}`} onClick={() => setView('caps')}><IconCompass size={14} /> Boussole</div>
               <div className={`nav-tab ${view === 'routines' ? 'active' : ''}`} onClick={() => setView('routines')}><IconFlame size={14} /> Routines · {routines.length}</div>
+              <div className={`nav-tab ${view === 'pillars' ? 'active' : ''}`} onClick={() => setView('pillars')}><IconScales size={14} /> Piliers</div>
               <div className={`nav-tab ${view === 'archive' ? 'active' : ''}`} onClick={() => setView('archive')}>📦 Archive · {archivedItems.length}</div>
             </div>
             <div style={{ display: 'flex', gap: '0.2rem', paddingBottom: '0.3rem' }}>
@@ -4482,6 +4511,7 @@ function CapApp({ session }) {
         />}
 
         {view === 'routines' && <RoutinesView items={routines} categories={state.categories} onToggle={toggleComplete} onEdit={setEditingItem} onDelete={deleteItem} onAdd={() => { setEditingParentId(null); setShowAddModal(true); }} />}
+        {view === 'pillars' && <PiliersView moneyProps={moneyProps} fluxProps={fluxProps} />}
         {view === 'routines' && <QuitsSection quits={state.quits || []} onAdd={addQuit} onToggleSlip={toggleQuitSlip} onDelete={deleteQuit} />}
 
         {view === 'caps' && <BoussoleTaskCtx.Provider value={{
@@ -8218,6 +8248,195 @@ function QuitsSection({ quits, onAdd, onToggleSlip, onDelete }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ============ V4 4c : PILIER ARGENT ============
+// Pas un outil bancaire : juste les flux. Montants stockés en centimes (entiers), en euros.
+const EUR = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
+const fmtEur = (cents) => EUR.format((cents || 0) / 100);
+function parseAmountToCents(str) {
+  const n = parseFloat(String(str || '').replace(/\s/g, '').replace(',', '.'));
+  return isFinite(n) && n > 0 ? Math.round(n * 100) : null;
+}
+// Périodes : { kind: 'day'|'week'|'month', anchor: iso } → { start, end, label }
+function periodRange(kind, anchor) {
+  const d = isoToDate(anchor);
+  if (kind === 'day') return { start: anchor, end: anchor, label: formatDate(anchor) };
+  if (kind === 'week') { const r = weekRange(d); return { ...r, label: `Semaine du ${formatDate(r.start)}` }; }
+  const r = monthRange(d);
+  return { ...r, label: d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) };
+}
+function shiftPeriod(kind, anchor, dir) {
+  if (kind === 'day') return addDays(anchor, dir);
+  if (kind === 'week') return addDays(anchor, 7 * dir);
+  const d = isoToDate(anchor); d.setDate(1); d.setMonth(d.getMonth() + dir); return dateToISO(d);
+}
+// Occurrences d'un flux récurrent (mensuel jour N, hebdo jour J) dans [start, end]
+function flowOccurrences(flow, start, end) {
+  const out = [];
+  const from = flow.since && flow.since > start ? flow.since : start;
+  const to = flow.until && flow.until < end ? flow.until : end;
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const dt = isoToDate(d);
+    if (flow.rule === 'weekly' && (dt.getDay() || 7) === flow.day) out.push(d);
+    if (flow.rule === 'monthly') {
+      const last = new Date(dt.getFullYear(), dt.getMonth() + 1, 0).getDate();
+      if (dt.getDate() === Math.min(flow.day, last)) out.push(d);
+    }
+  }
+  return out;
+}
+// Toutes les lignes d'argent (ponctuelles + occurrences de flux) sur une période
+function moneyLines(money, start, end) {
+  const m = money || {};
+  const lines = (m.entries || []).filter(e => e.date >= start && e.date <= end).map(e => ({ ...e, key: e.id }));
+  (m.flows || []).forEach(f => flowOccurrences(f, start, end).forEach(d => lines.push({ key: f.id + d, flowId: f.id, date: d, amount: f.amount, dir: f.dir, label: f.label, recurring: true })));
+  return lines.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+function moneyTotals(lines) {
+  const inc = lines.filter(l => l.dir === 'in').reduce((s, l) => s + l.amount, 0);
+  const out = lines.filter(l => l.dir === 'out').reduce((s, l) => s + l.amount, 0);
+  return { inc, out, net: inc - out };
+}
+const WEEKDAY_LABELS = ['', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+
+function PeriodNav({ kind, setKind, anchor, setAnchor, kinds = ['day', 'week', 'month'] }) {
+  const labels = { day: 'Jour', week: 'Semaine', month: 'Mois' };
+  const r = periodRange(kind, anchor);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.9rem' }}>
+      <div style={{ display: 'flex', gap: '0.25rem' }}>
+        {kinds.map(k => <button key={k} className={`cap-btn-mini ${kind === k ? 'active-mini' : ''}`} onClick={() => setKind(k)}>{labels[k]}</button>)}
+      </div>
+      <button className="cap-btn-mini" title="Précédent" onClick={() => setAnchor(shiftPeriod(kind, anchor, -1))}><IconChevronLeft size={12} /></button>
+      <span style={{ fontSize: '0.85rem', minWidth: '9rem', textAlign: 'center', textTransform: 'capitalize' }}>{r.label}</span>
+      <button className="cap-btn-mini" title="Suivant" onClick={() => setAnchor(shiftPeriod(kind, anchor, 1))}><IconChevronRight size={12} /></button>
+      <button className="cap-btn-mini" style={{ borderColor: 'transparent' }} onClick={() => setAnchor(todayISO())}>aujourd'hui</button>
+    </div>
+  );
+}
+
+function MoneyPanel({ money, onAddEntry, onDeleteEntry, onAddFlow, onStopFlow, onDeleteFlow }) {
+  const [kind, setKind] = useState('month');
+  const [anchor, setAnchor] = useState(todayISO());
+  const [dir, setDir] = useState('out');
+  const [amount, setAmount] = useState('');
+  const [label, setLabel] = useState('');
+  const [date, setDate] = useState(todayISO());
+  const [amountErr, setAmountErr] = useState(false);
+  const [showFlowForm, setShowFlowForm] = useState(false);
+  const [flow, setFlow] = useState({ dir: 'out', amount: '', label: '', rule: 'monthly', day: 1 });
+  const r = periodRange(kind, anchor);
+  const lines = moneyLines(money, r.start, r.end);
+  const t = moneyTotals(lines);
+  const submit = () => {
+    const cents = parseAmountToCents(amount);
+    if (!cents) { setAmountErr(true); return; }
+    onAddEntry({ dir, amount: cents, label: label.trim() || (dir === 'in' ? 'Entrée' : 'Sortie'), date: date || todayISO() });
+    setAmount(''); setLabel(''); setAmountErr(false);
+  };
+  const submitFlow = () => {
+    const cents = parseAmountToCents(flow.amount);
+    if (!cents || !flow.label.trim()) return;
+    onAddFlow({ ...flow, amount: cents, label: flow.label.trim(), day: Number(flow.day) });
+    setFlow({ dir: 'out', amount: '', label: '', rule: 'monthly', day: 1 }); setShowFlowForm(false);
+  };
+  const flows = (money?.flows || []);
+  return (
+    <div>
+      <PeriodNav kind={kind} setKind={setKind} anchor={anchor} setAnchor={setAnchor} />
+      <div className="stat-row">
+        <div className="stat-tile"><div className="stat-label">Entrées</div><div className="stat-value">{fmtEur(t.inc)}</div></div>
+        <div className="stat-tile"><div className="stat-label">Sorties</div><div className="stat-value">{fmtEur(t.out)}</div></div>
+        <div className="stat-tile"><div className="stat-label">Solde net</div><div className="stat-value">{t.net > 0 ? '+' : ''}{fmtEur(t.net)}</div></div>
+      </div>
+
+      <div className="money-form">
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          <button className={`cap-btn-mini ${dir === 'out' ? 'active-mini' : ''}`} onClick={() => setDir('out')}>− Sortie</button>
+          <button className={`cap-btn-mini ${dir === 'in' ? 'active-mini' : ''}`} onClick={() => setDir('in')}>+ Entrée</button>
+        </div>
+        <input className={`input ${amountErr ? 'input-error' : ''}`} inputMode="decimal" placeholder="Montant €" value={amount} onChange={e => { setAmount(e.target.value); setAmountErr(false); }} onKeyDown={e => { if (e.key === 'Enter') submit(); }} style={{ width: '7.5rem' }} />
+        <input className="input" placeholder="Libellé (facultatif)" value={label} onChange={e => setLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submit(); }} style={{ flex: 1, minWidth: '8rem' }} />
+        <input type="date" className="input" value={date} onChange={e => setDate(e.target.value)} style={{ width: 'auto' }} />
+        <button className="btn btn-rust" onClick={submit}><IconPlus size={14} /> Ajouter</button>
+      </div>
+
+      {lines.length === 0
+        ? <div style={{ fontSize: '0.82rem', color: 'var(--ink-fog)', fontStyle: 'italic', margin: '0.8rem 0' }}>Aucun mouvement sur cette période.</div>
+        : <div className="money-list">
+            {lines.map(l => (
+              <div key={l.key} className="money-line" style={{ opacity: l.date > todayISO() ? 0.55 : 1 }} title={l.date > todayISO() ? 'À venir' : undefined}>
+                <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', width: '4.5rem' }}>{formatDate(l.date)}{l.date > todayISO() ? ' ·' : ''}</span>
+                <span style={{ flex: 1 }}>{l.recurring && <span title="Flux récurrent" style={{ marginRight: '0.3rem' }}>🔁</span>}{l.label}</span>
+                <span className="mono" style={{ fontSize: '0.82rem' }}>{l.dir === 'in' ? '+' : '−'}{fmtEur(l.amount)}</span>
+                {!l.recurring
+                  ? <button className="btn-ghost" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-fog)', padding: '0.2rem' }} title="Supprimer" onClick={() => onDeleteEntry(l.id)}><IconTrash size={12} /></button>
+                  : <span style={{ width: '1.2rem' }} />}
+              </div>
+            ))}
+          </div>}
+
+      <div style={{ marginTop: '1.5rem' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+          <Label>Flux récurrents</Label>
+          {!showFlowForm && <button className="cap-btn-mini" onClick={() => setShowFlowForm(true)}><IconPlus size={12} /> Flux</button>}
+        </div>
+        <div style={{ fontSize: '0.72rem', color: 'var(--ink-fog)', marginBottom: '0.5rem' }}>Loyer, salaire, abonnements : comptés automatiquement dans les totaux, sans ressaisie.</div>
+        {showFlowForm && (
+          <div className="money-form" style={{ marginBottom: '0.6rem' }}>
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              <button className={`cap-btn-mini ${flow.dir === 'out' ? 'active-mini' : ''}`} onClick={() => setFlow(f => ({ ...f, dir: 'out' }))}>− Sortie</button>
+              <button className={`cap-btn-mini ${flow.dir === 'in' ? 'active-mini' : ''}`} onClick={() => setFlow(f => ({ ...f, dir: 'in' }))}>+ Entrée</button>
+            </div>
+            <input className="input" placeholder="Libellé" value={flow.label} onChange={e => setFlow(f => ({ ...f, label: e.target.value }))} style={{ flex: 1, minWidth: '8rem' }} />
+            <input className="input" inputMode="decimal" placeholder="Montant €" value={flow.amount} onChange={e => setFlow(f => ({ ...f, amount: e.target.value }))} style={{ width: '7.5rem' }} />
+            <select className="input" value={flow.rule} onChange={e => setFlow(f => ({ ...f, rule: e.target.value, day: 1 }))} style={{ width: 'auto' }}>
+              <option value="monthly">chaque mois, le</option>
+              <option value="weekly">chaque semaine, le</option>
+            </select>
+            {flow.rule === 'monthly'
+              ? <input className="input" type="number" min="1" max="31" value={flow.day} onChange={e => setFlow(f => ({ ...f, day: Math.max(1, Math.min(31, parseInt(e.target.value) || 1)) }))} style={{ width: '4.2rem' }} />
+              : <select className="input" value={flow.day} onChange={e => setFlow(f => ({ ...f, day: Number(e.target.value) }))} style={{ width: 'auto' }}>
+                  {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>{WEEKDAY_LABELS[d]}</option>)}
+                </select>}
+            <button className="cap-btn-mini" disabled={!parseAmountToCents(flow.amount) || !flow.label.trim()} onClick={submitFlow}>Ajouter</button>
+            <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => setShowFlowForm(false)}>annuler</button>
+          </div>
+        )}
+        {flows.length === 0 && !showFlowForm && <div style={{ fontSize: '0.82rem', color: 'var(--ink-fog)', fontStyle: 'italic' }}>Aucun flux récurrent.</div>}
+        {flows.map(f => (
+          <div key={f.id} className="money-line" style={{ opacity: f.until && f.until < todayISO() ? 0.5 : 1 }}>
+            <span style={{ flex: 1 }}>🔁 {f.label} <span style={{ color: 'var(--ink-muted)', fontSize: '0.75rem' }}>· {f.rule === 'monthly' ? `le ${f.day} du mois` : `chaque ${WEEKDAY_LABELS[f.day]}`}{f.until ? ` · arrêté le ${formatDate(f.until)}` : ''}</span></span>
+            <span className="mono" style={{ fontSize: '0.82rem' }}>{f.dir === 'in' ? '+' : '−'}{fmtEur(f.amount)}</span>
+            {!f.until && <button className="cap-btn-mini" style={{ borderColor: 'transparent' }} title="Le flux s'arrête aujourd'hui ; l'historique reste compté" onClick={() => onStopFlow(f.id)}>arrêter</button>}
+            <button className="btn-ghost" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-fog)', padding: '0.2rem' }} title="Supprimer (retire aussi l'historique)" onClick={() => onDeleteFlow(f.id)}><IconTrash size={12} /></button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// V4 4c/4d : onglet Piliers — vases communicants (4d) + argent (4c)
+function PiliersView(props) {
+  const [tab, setTab] = useState(props.initialTab || 'flux');
+  return (
+    <div style={{ maxWidth: '860px', margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <div>
+          <h2 className="display" style={{ margin: 0, fontSize: '1.6rem', fontWeight: 500, fontStyle: 'italic' }}>Piliers</h2>
+          <p style={{ margin: '0.2rem 0 0', fontSize: '0.82rem', color: 'var(--ink-muted)' }}>Temps, énergie, argent, sens : voir les vases communicants. Des faits, pas un score.</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          <button className={`cap-btn-mini ${tab === 'flux' ? 'active-mini' : ''}`} onClick={() => setTab('flux')}>Vases communicants</button>
+          <button className={`cap-btn-mini ${tab === 'money' ? 'active-mini' : ''}`} onClick={() => setTab('money')}>Argent</button>
+        </div>
+      </div>
+      {tab === 'money' && <MoneyPanel {...props.moneyProps} />}
+      {tab === 'flux' && (typeof FluxPanel !== 'undefined' ? <FluxPanel {...props.fluxProps} /> : null)}
     </div>
   );
 }
