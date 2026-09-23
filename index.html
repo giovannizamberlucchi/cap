@@ -3359,8 +3359,19 @@ function CapApp({ session }) {
     setShowReview(false);
     showToast('Point fait. Bonne semaine.');
   }
-  // Point d'extension pour les écrans ajoutés au rituel (focale mensuelle — lot suivant)
-  function applyReviewExtras(s, extra) { return s; }
+  // Focale mensuelle : 4e écran du 1er rituel du mois (jusqu'au 10), sauf en période de pause
+  const monthId = isoMonthId(new Date());
+  const monthlyDue = !lowModeOn && new Date().getDate() <= 10 && !((state.reviews?.monthly || {})[monthId]?.doneAt);
+  const reviewExtraSteps = monthlyDue ? [{
+    key: 'month', title: 'Et ce mois-ci, la direction ?',
+    render: (data, set) => <MonthlyFocusStep caps={state.caps || []} visions={state.visions || []} data={data} set={set} onCapDecision={recordCapDecision} onSetCapStatus={setCapStatus} />,
+  }] : [];
+  function applyReviewExtras(s, extra) {
+    if (!extra.month) return s;
+    return { ...s, reviews: { ...s.reviews, monthly: { ...(s.reviews?.monthly || {}), [monthId]: { doneAt: Date.now(), monthCapId: extra.month.monthCapId || null } } } };
+  }
+  const monthCapId = (state.reviews?.monthly || {})[monthId]?.monthCapId || null;
+  const monthCapLabel = monthCapId ? capDirectLabel(state.caps || [], monthCapId) : null;
   // « Ça m'a échappé » → une petite tâche liée au cap, casée au début de la semaine qui vient
   function addNudgeTask(capId, title) {
     const date = todayISO() < reviewWeek.nextMonday ? reviewWeek.nextMonday : todayISO();
@@ -4419,6 +4430,8 @@ function CapApp({ session }) {
           lowMode={state.lowMode}
           onSetLowMode={setLowMode}
           onOpenReview={() => setShowReview(true)}
+          weekFocusLabel={currentFocusLabel}
+          monthCapLabel={monthCapLabel}
           caps={state.caps || []}
           visions={state.visions || []}
           items={state.items}
@@ -4607,7 +4620,7 @@ function CapApp({ session }) {
       )}
       {showSuggestion && <SuggestionModal task={suggestedTask} categories={state.categories} onClose={() => setShowSuggestion(false)} onFocus={(id) => { setShowSuggestion(false); setFocusMode(id); }} onStart={(id) => { setShowSuggestion(false); startTask(id); setFocusMode(id); }} />}
       {showCheckin && <CheckinModal currentMode={todayCapacity?.mode} onClose={() => setShowCheckin(false)} onSelect={(preset, hours) => { setState(s => ({ ...s, capacity: { ...s.capacity, [today]: { mode: preset, hours } } })); setShowCheckin(false); }} />}
-      {showReview && <WeeklyReviewModal state={state} lowMode={lowModeOn} week={reviewWeek}
+      {showReview && <WeeklyReviewModal state={state} lowMode={lowModeOn} week={reviewWeek} extraSteps={reviewExtraSteps}
         onClose={() => setShowReview(false)} onFinish={finishReview}
         onCapDecision={recordCapDecision} onSetCapStatus={setCapStatus} onUpdateCap={updateCap} onAddNudgeTask={addNudgeTask} />}
       {showSettings && <SettingsModal settings={state.settings} categories={state.categories} userEmail={userEmail} onClose={() => setShowSettings(false)} onSave={(newSettings) => setState(s => ({ ...s, settings: newSettings }))} onUpdateCategories={(cats) => setState(s => ({ ...s, categories: cats }))} onDeleteAccount={handleDeleteAccount} />}
@@ -7710,7 +7723,7 @@ function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast,
   );
 }
 
-function BoussoleView({ lowMode, onSetLowMode, onOpenReview, caps, visions, items, categories, activeObjectiveCount, onAddObjective, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddVision, onUpdateVision, onDeleteVision, onAddTaskToCap, onLinkTaskToCap, onEditTask, onToggleTask }) {
+function BoussoleView({ lowMode, onSetLowMode, onOpenReview, weekFocusLabel, monthCapLabel, caps, visions, items, categories, activeObjectiveCount, onAddObjective, onEditCap, onAddNode, onSetStatus, onMoveCap, onDeleteCap, onAddVision, onUpdateVision, onDeleteVision, onAddTaskToCap, onLinkTaskToCap, onEditTask, onToggleTask }) {
   const tasksByCap = useMemo(() => {
     const m = {};
     flattenItems(items).forEach(it => { if (it.capId) { (m[it.capId] = m[it.capId] || []).push(it); } });
@@ -7743,6 +7756,13 @@ function BoussoleView({ lowMode, onSetLowMode, onOpenReview, caps, visions, item
           <button className="btn btn-rust" onClick={onAddObjective}><IconPlus size={14} /> Objectif</button>
         </div>
       </div>
+
+      {(weekFocusLabel || monthCapLabel) && !lowMode?.on && (
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.8rem' }}>
+          {monthCapLabel && <span className="focus-chip" style={{ cursor: 'default' }}>◆ Ce mois-ci : {monthCapLabel}</span>}
+          {weekFocusLabel && <span className="focus-chip" style={{ cursor: 'default' }}>✦ Cette semaine : {weekFocusLabel}</span>}
+        </div>
+      )}
 
       {lowMode?.on && (
         <div className="cap-lowmode">
@@ -7803,6 +7823,12 @@ function BoussoleView({ lowMode, onSetLowMode, onOpenReview, caps, visions, item
       )}
     </div>
   );
+}
+
+// Marque un écran additionnel du rituel comme « vu » (la focale mensuelle compte comme faite dès qu'elle a été regardée)
+function ExtraStepVisit({ onVisit, children }) {
+  useEffect(() => { onVisit(); }, []);
+  return <div>{children}</div>;
 }
 
 // V4 4a.3 : invitation discrète au rituel (jamais de popup). Sautable, pas de streak.
@@ -7967,7 +7993,7 @@ function WeeklyReviewModal({ state, lowMode, week, extraSteps = [], onClose, onF
           </div>
         )}
 
-        {extraSteps.map(e => cur === e.key && <div key={e.key}>{e.render(extraData[e.key] || {}, v => setExtraData(d => ({ ...d, [e.key]: { ...(d[e.key] || {}), ...v } })))}</div>)}
+        {extraSteps.map(e => cur === e.key && <ExtraStepVisit key={e.key} onVisit={() => setExtraData(d => d[e.key] ? d : ({ ...d, [e.key]: {} }))}>{e.render(extraData[e.key] || {}, v => setExtraData(d => ({ ...d, [e.key]: { ...(d[e.key] || {}), ...v } })))}</ExtraStepVisit>)}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.4rem', gap: '0.5rem' }}>
           <button className="cap-btn-mini" disabled={step === 0} onClick={() => setStep(s => s - 1)}>← retour</button>
@@ -7978,6 +8004,52 @@ function WeeklyReviewModal({ state, lowMode, week, extraSteps = [], onClose, onF
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// V4 4a.3 : focale mensuelle = 4e écran du rituel la 1re fois du mois (pas un second rituel).
+// Elle regarde la direction : vision, objectifs, alignement — plus rare, contemplatif.
+function MonthlyFocusStep({ caps, visions, data, set, onCapDecision, onSetCapStatus }) {
+  const objectives = caps.filter(o => o.status === 'active');
+  const answers = data.alignment || {};
+  const answer = (o, a, label) => {
+    onCapDecision(o.id, { trigger: 'alignment', answer: a });
+    set({ alignment: { ...answers, [o.id]: label } });
+  };
+  const options = activeCapOptions(caps).filter(o => o.depth <= 1);
+  return (
+    <div>
+      {visions.filter(v => v.text).length > 0 && (
+        <div className="cap-vision" style={{ padding: '0.7rem 0.9rem' }}>
+          {visions.filter(v => v.text).map(v => <div key={v.id} style={{ fontSize: '0.85rem', fontStyle: 'italic', whiteSpace: 'pre-wrap' }}>{v.text}</div>)}
+        </div>
+      )}
+      {objectives.length === 0 && <div style={{ fontSize: '0.85rem', color: 'var(--ink-soft)' }}>Aucun objectif actif. C'est peut-être le moment d'en poser un — ou pas.</div>}
+      {objectives.map(o => (
+        <div key={o.id} className="cap-question" style={{ marginTop: '0.5rem' }}>
+          <div style={{ fontSize: '0.85rem' }}><strong>{o.title}</strong></div>
+          {o.why && <div className="cap-why">{o.why}</div>}
+          <div style={{ fontSize: '0.8rem', marginTop: '0.35rem' }}>Toujours aligné avec ce qui compte pour toi ?</div>
+          {answers[o.id]
+            ? <div style={{ fontSize: '0.78rem', color: 'var(--moss)', marginTop: '0.35rem' }}>✓ {answers[o.id]}</div>
+            : <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
+                <button className="cap-btn-mini" onClick={() => answer(o, 'yes', 'toujours aligné')}>Oui</button>
+                <button className="cap-btn-mini" onClick={() => answer(o, 'adjust', 'à ajuster — tu pourras le retoucher dans la Boussole')}>À ajuster</button>
+                <button className="cap-btn-mini" onClick={() => { answer(o, 'pause', 'mis en pause'); onSetCapStatus(o.id, 'paused'); }}>Plus vraiment : pause</button>
+                <button className="cap-btn-mini" onClick={() => { answer(o, 'drop', 'lâché — une décision, pas un échec'); onSetCapStatus(o.id, 'abandoned'); }}>Plus vraiment : lâcher</button>
+              </div>}
+        </div>
+      ))}
+      {options.length > 0 && (
+        <div style={{ marginTop: '1rem' }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--ink-muted)', marginBottom: '0.35rem' }}>Le cap du mois — celui qui compte le plus ce mois-ci (facultatif) :</div>
+          <select className="input" value={data.monthCapId || ''} onChange={e => set({ monthCapId: e.target.value })}>
+            <option value="">— aucun en particulier —</option>
+            {options.map(o => <option key={o.id} value={o.id}>{'  '.repeat(o.depth)}{o.label}</option>)}
+          </select>
+        </div>
+      )}
     </div>
   );
 }
