@@ -27,6 +27,7 @@
   --ochre-soft: #ECC889;
   --moss: #5C7A3E;
   --moss-soft: #A9C285;
+  --violet: #6B4E8A;
   --line: #D6CCB8;
   --shadow: rgba(28,25,23,0.08);
   --font-display: 'Fraunces', Georgia, serif;
@@ -49,6 +50,7 @@
   --ochre-soft: #6E4815;
   --moss: #8FB068;
   --moss-soft: #3D5226;
+  --violet: #A88AC8;
   --line: #5A5249;
   --shadow: rgba(0,0,0,0.4);
 }
@@ -192,6 +194,27 @@ html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink);
 .money-form { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; padding: 0.6rem; border: 1px dashed var(--line); border-radius: 4px; }
 .money-list { margin-top: 0.8rem; border-top: 1px solid var(--line); }
 .money-line { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.2rem; border-bottom: 1px solid var(--line); font-size: 0.85rem; }
+
+.flux-card { border: 1px solid var(--line); border-radius: 4px; padding: 0.85rem 1rem; margin-bottom: 0.9rem; background: var(--paper); }
+.flux-title { font-family: var(--font-display); font-style: italic; font-size: 1.05rem; font-weight: 500; }
+.flux-hint { font-size: 0.74rem; color: var(--ink-muted); margin: 0.1rem 0 0.55rem; }
+.hbar-row { display: grid; grid-template-columns: 7.5rem 1fr 5rem; align-items: center; gap: 0.6rem; margin: 0.3rem 0; font-size: 0.8rem; }
+.hbar-label { color: var(--ink-soft); }
+.hbar-track { height: 12px; background: var(--paper-2); border-radius: 4px; overflow: hidden; }
+.hbar-fill { display: block; height: 100%; border-radius: 0 4px 4px 0; min-width: 0; }
+.hbar-value { font-family: var(--font-mono); font-size: 0.74rem; color: var(--ink-soft); text-align: right; }
+.flux-legend { display: flex; gap: 0.9rem; font-size: 0.74rem; color: var(--ink-soft); margin: 0.3rem 0 0.6rem; }
+.legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 0.25rem; }
+.trend { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0.5rem; align-items: end; height: 140px; }
+.trend-col { display: flex; flex-direction: column; align-items: stretch; height: 100%; cursor: default; }
+.trend-stack { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; }
+.trend-stack span { display: block; width: 100%; min-height: 2px; }
+.trend-stack span:first-child { border-radius: 4px 4px 0 0; }
+.trend-label { font-family: var(--font-mono); font-size: 0.6rem; color: var(--ink-muted); text-align: center; margin-top: 0.25rem; }
+.flux-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 0.4rem; }
+.flux-table th, .flux-table td { text-align: left; padding: 0.25rem 0.4rem; border-bottom: 1px solid var(--line); }
+.flux-table th { font-weight: 500; color: var(--ink-muted); }
+@media (max-width: 520px) { .hbar-row { grid-template-columns: 5.5rem 1fr 4.2rem; } }
 
 /* ===== V4 4a.3 — rituel hebdo ===== */
 .review-invite {
@@ -3406,7 +3429,7 @@ function CapApp({ session }) {
     onDeleteFlow: (id) => { if (window.confirm('Supprimer ce flux et tout son historique ? (« arrêter » garde l\'historique)')) setMoney(m => ({ ...m, flows: m.flows.filter(f => f.id !== id) })); },
   };
 
-  const fluxProps = {};
+  const fluxProps = { state };
 
   // V4 4b : ce que j'arrête
   function addQuit({ title, pillars }) {
@@ -8266,7 +8289,8 @@ function periodRange(kind, anchor) {
   if (kind === 'day') return { start: anchor, end: anchor, label: formatDate(anchor) };
   if (kind === 'week') { const r = weekRange(d); return { ...r, label: `Semaine du ${formatDate(r.start)}` }; }
   const r = monthRange(d);
-  return { ...r, label: d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) };
+  const ml = d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  return { ...r, label: ml.charAt(0).toUpperCase() + ml.slice(1) };
 }
 function shiftPeriod(kind, anchor, dir) {
   if (kind === 'day') return addDays(anchor, dir);
@@ -8311,7 +8335,7 @@ function PeriodNav({ kind, setKind, anchor, setAnchor, kinds = ['day', 'week', '
         {kinds.map(k => <button key={k} className={`cap-btn-mini ${kind === k ? 'active-mini' : ''}`} onClick={() => setKind(k)}>{labels[k]}</button>)}
       </div>
       <button className="cap-btn-mini" title="Précédent" onClick={() => setAnchor(shiftPeriod(kind, anchor, -1))}><IconChevronLeft size={12} /></button>
-      <span style={{ fontSize: '0.85rem', minWidth: '9rem', textAlign: 'center', textTransform: 'capitalize' }}>{r.label}</span>
+      <span style={{ fontSize: '0.85rem', minWidth: '9rem', textAlign: 'center' }}>{r.label}</span>
       <button className="cap-btn-mini" title="Suivant" onClick={() => setAnchor(shiftPeriod(kind, anchor, 1))}><IconChevronRight size={12} /></button>
       <button className="cap-btn-mini" style={{ borderColor: 'transparent' }} onClick={() => setAnchor(todayISO())}>aujourd'hui</button>
     </div>
@@ -8420,6 +8444,142 @@ function MoneyPanel({ money, onAddEntry, onDeleteEntry, onAddFlow, onStopFlow, o
   );
 }
 
+// ============ V4 4d : VASES COMMUNICANTS ============
+// Temps réalisé sur [start, end] : réel pomodoro si mesuré, sinon durée estimée.
+// Feuilles seulement (un parent à sous-tâches n'est pas compté en plus de ses sous-tâches).
+function computeTimeSpent(items, caps, start, end) {
+  const startTs = isoToDate(start).getTime(), endTs = isoToDate(addDays(end, 1)).getTime();
+  const res = { total: 0, onCaps: 0, daily: 0, pillars: { energy: 0, money: 0, link: 0, alignment: 0, none: 0 }, up: 0, down: 0 };
+  const add = (it, min) => {
+    if (!min) return;
+    res.total += min;
+    const onCap = !!(it.capId && capPathById(caps, it.capId));
+    if (onCap) res.onCaps += min; else res.daily += min;
+    const ps = itemPillars(it, caps);
+    if (!ps.length) res.pillars.none += min;
+    ps.forEach(p => { if (res.pillars[p] !== undefined) res.pillars[p] += min; });
+  };
+  flattenItems(items).forEach(it => {
+    if (it.subtasks && it.subtasks.length) return;
+    if (it.recurrence || it.streak) {
+      const per = durationToMinutes(it.duration);
+      for (let d = start; d <= end; d = addDays(d, 1)) if (isOccurrenceCompleted(it, d)) add(it, per);
+      return;
+    }
+    if (it.completed && it.completedAt >= startTs && it.completedAt < endTs) {
+      add(it, it.actualMinutes || effectiveDurationMinutes(it));
+      if (it.feel === 'up') res.up++;
+      if (it.feel === 'down') res.down++;
+    }
+  });
+  return res;
+}
+const fmtHours = (min) => { const m = Math.round(min || 0); if (m < 60) return `${m} min`; const h = Math.floor(m / 60), r = m % 60; return r ? `${h} h ${String(r).padStart(2, '0')}` : `${h} h`; };
+
+function HBar({ label, value, max, color, hint }) {
+  const pct = max > 0 ? (value / max) * 100 : 0;
+  return (
+    <div className="hbar-row" title={`${label} : ${fmtHours(value)}${hint ? ' — ' + hint : ''}`}>
+      <span className="hbar-label">{label}</span>
+      <span className="hbar-track"><span className="hbar-fill" style={{ width: `${pct}%`, background: color }} /></span>
+      <span className="hbar-value">{fmtHours(value)}</span>
+    </div>
+  );
+}
+
+function FluxPanel({ state }) {
+  const [kind, setKind] = useState('week');
+  const [anchor, setAnchor] = useState(todayISO());
+  const caps = state.caps || [];
+  const r = periodRange(kind, anchor);
+  const t = computeTimeSpent(state.items || [], caps, r.start, r.end);
+  const money = moneyTotals(moneyLines(state.money, r.start, r.end));
+  const checkins = {};
+  for (let d = r.start; d <= r.end; d = addDays(d, 1)) { const c = (state.capacity || {})[d]; if (c && c.mode) checkins[c.mode] = (checkins[c.mode] || 0) + 1; }
+  const quits = (state.quits || []);
+  // Tendance : 8 semaines finissant sur la semaine de la période
+  const lastWeekStart = weekRange(isoToDate(r.end)).start;
+  const trend = Array.from({ length: 8 }, (_, i) => {
+    const ws = addDays(lastWeekStart, -7 * (7 - i)), we = addDays(ws, 6);
+    const w = computeTimeSpent(state.items || [], caps, ws, we);
+    return { ws, onCaps: w.onCaps, daily: w.daily };
+  });
+  const trendMax = Math.max(1, ...trend.map(w => w.onCaps + w.daily));
+  const pillarMax = Math.max(1, ...Object.values(t.pillars));
+  const CAP_COLOR = 'var(--violet)', DAILY_COLOR = 'var(--ink-fog)';
+  return (
+    <div>
+      <PeriodNav kind={kind} setKind={setKind} anchor={anchor} setAnchor={setAnchor} kinds={['week', 'month']} />
+
+      <div className="stat-row">
+        <div className="stat-tile"><div className="stat-label">Temps réalisé</div><div className="stat-value">{fmtHours(t.total)}</div><div className="stat-sub">réel mesuré, sinon estimé</div></div>
+        <div className="stat-tile"><div className="stat-label">Sur tes caps</div><div className="stat-value">{fmtHours(t.onCaps)}</div><div className="stat-sub">le reste : {fmtHours(t.daily)} de quotidien</div></div>
+        <div className="stat-tile"><div className="stat-label">Ressenti</div><div className="stat-value">☀️ {t.up} · 😴 {t.down}</div><div className="stat-sub">tâches notées à la complétion</div></div>
+        <div className="stat-tile"><div className="stat-label">Argent · net</div><div className="stat-value">{money.net > 0 ? '+' : ''}{fmtEur(money.net)}</div><div className="stat-sub">{fmtEur(money.inc)} entrés · {fmtEur(money.out)} sortis</div></div>
+      </div>
+
+      <div className="flux-card">
+        <div className="flux-title">Le quotidien et le long terme</div>
+        <div className="flux-hint">Le quotidien crie, le rêve attend. Ici, juste ce qui s'est passé.</div>
+        <HBar label="Sur tes caps" value={t.onCaps} max={Math.max(1, t.onCaps, t.daily)} color={CAP_COLOR} />
+        <HBar label="Quotidien" value={t.daily} max={Math.max(1, t.onCaps, t.daily)} color={DAILY_COLOR} />
+      </div>
+
+      <div className="flux-card">
+        <div className="flux-title">Temps par pilier</div>
+        <div className="flux-hint">Une tâche qui sert deux piliers compte dans les deux. Piliers hérités du cap si la tâche n'en a pas.</div>
+        {PILLARS.map(p => <HBar key={p.id} label={p.label} value={t.pillars[p.id]} max={pillarMax} color={p.color} />)}
+        <HBar label="Sans pilier" value={t.pillars.none} max={pillarMax} color="var(--line)" />
+        <div className="flux-hint" style={{ marginTop: '0.5rem' }}>Sens (Lien + Alignement) : {fmtHours(t.pillars.link + t.pillars.alignment)}</div>
+      </div>
+
+      <div className="flux-card">
+        <div className="flux-title">Énergie</div>
+        {Object.keys(checkins).length === 0
+          ? <div className="flux-hint">Pas de check-in sur la période.</div>
+          : <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.3rem' }}>
+              {ENERGY_PRESETS.filter(p => checkins[p.id]).map(p => <span key={p.id} className="chip">{p.emoji} {p.label} · {checkins[p.id]} j</span>)}
+              {checkins.custom && <span className="chip">⚓ Au feeling · {checkins.custom} j</span>}
+            </div>}
+        {quits.length > 0 && (
+          <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--ink-soft)' }}>
+            Ce que tu arrêtes : {quits.map(q => `${q.title} (${quitStreak(q)} j sans)`).join(' · ')}
+          </div>
+        )}
+      </div>
+
+      <div className="flux-card">
+        <div className="flux-title">Tendance · 8 semaines</div>
+        <div className="flux-legend">
+          <span><span className="legend-swatch" style={{ background: CAP_COLOR }} /> Sur tes caps</span>
+          <span><span className="legend-swatch" style={{ background: DAILY_COLOR }} /> Quotidien</span>
+        </div>
+        <div className="trend">
+          {trend.map(w => {
+            const hCap = (w.onCaps / trendMax) * 100, hDaily = (w.daily / trendMax) * 100;
+            return (
+              <div key={w.ws} className="trend-col" title={`Semaine du ${formatDate(w.ws)}\nSur tes caps : ${fmtHours(w.onCaps)}\nQuotidien : ${fmtHours(w.daily)}`}>
+                <div className="trend-stack">
+                  {w.daily > 0 && <span style={{ height: `${hDaily}%`, background: DAILY_COLOR }} />}
+                  {w.onCaps > 0 && <span style={{ height: `${hCap}%`, background: CAP_COLOR }} />}
+                </div>
+                <div className="trend-label">{isoToDate(w.ws).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</div>
+              </div>
+            );
+          })}
+        </div>
+        <details style={{ marginTop: '0.6rem' }}>
+          <summary style={{ fontSize: '0.75rem', color: 'var(--ink-muted)', cursor: 'pointer' }}>Voir en tableau</summary>
+          <table className="flux-table">
+            <thead><tr><th>Semaine du</th><th>Sur tes caps</th><th>Quotidien</th></tr></thead>
+            <tbody>{trend.map(w => <tr key={w.ws}><td>{formatDate(w.ws)}</td><td>{fmtHours(w.onCaps)}</td><td>{fmtHours(w.daily)}</td></tr>)}</tbody>
+          </table>
+        </details>
+      </div>
+    </div>
+  );
+}
+
 // V4 4c/4d : onglet Piliers — vases communicants (4d) + argent (4c)
 function PiliersView(props) {
   const [tab, setTab] = useState(props.initialTab || 'flux');
@@ -8436,7 +8596,7 @@ function PiliersView(props) {
         </div>
       </div>
       {tab === 'money' && <MoneyPanel {...props.moneyProps} />}
-      {tab === 'flux' && (typeof FluxPanel !== 'undefined' ? <FluxPanel {...props.fluxProps} /> : null)}
+      {tab === 'flux' && <FluxPanel {...props.fluxProps} />}
     </div>
   );
 }
