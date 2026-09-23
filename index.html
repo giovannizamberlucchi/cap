@@ -174,6 +174,14 @@ html, body { margin: 0; padding: 0; background: var(--paper); color: var(--ink);
   margin-top: 0.6rem; padding: 0.6rem 0.75rem; border: 1px solid var(--line);
   border-left: 3px solid var(--ink-fog); background: var(--paper-2); border-radius: 3px; color: var(--ink-soft);
 }
+/* ===== V4 4b — piliers ===== */
+.pillar-chip {
+  border: 1px solid; background: transparent; cursor: pointer; border-radius: 999px;
+  padding: 0.15rem 0.6rem; font-size: 0.74rem; font-family: var(--font-body);
+}
+.quit-card { border: 1px solid var(--ink); padding: 1rem; background: var(--paper); border-radius: 3px; border-left: 4px solid var(--moss); }
+.toast .toast-feel { border-color: transparent; font-size: 0.95rem; padding: 0.05rem 0.3rem; }
+
 /* ===== V4 4a.3 — rituel hebdo ===== */
 .review-invite {
   display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; flex-wrap: wrap;
@@ -2115,7 +2123,7 @@ function findOverdueRoots(items, todayIso) {
 }
 
 // ============ MIGRATION SCHEMA V3 ============
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 function migrateItem(item) {
   // Type recurring → task avec recurrence quotidienne par défaut
@@ -2186,6 +2194,9 @@ function migrateItem(item) {
     slotHistory: (item.slotHistory && typeof item.slotHistory === 'object') ? item.slotHistory : {},
     // V4 4a.1 (schema v10) : filiation optionnelle tâche → cap (objectif ou nœud projet/jalon)
     capId: item.capId !== undefined ? item.capId : null,
+    // V4 4b (schema v12) : piliers servis (facultatif) + ressenti a posteriori (☀️ up / 😴 down)
+    pillars: Array.isArray(item.pillars) ? item.pillars : [],
+    feel: item.feel !== undefined ? item.feel : null,
     subtasks: (item.subtasks || []).map(migrateItem),
   };
 }
@@ -2197,6 +2208,7 @@ function migrateCap(node) {
     reachedAt: node.reachedAt !== undefined ? node.reachedAt : null,
     statusChangedAt: node.statusChangedAt !== undefined ? node.statusChangedAt : null,
     decisions: Array.isArray(node.decisions) ? node.decisions : [],
+    pillars: Array.isArray(node.pillars) ? node.pillars : [], // V4 4b
     children: (node.children || []).map(migrateCap),
   };
 }
@@ -2215,6 +2227,8 @@ function migrateState(state) {
     // V4 4a.3 : rituels (hebdo + focale mensuelle) et focus de la semaine
     reviews: state.reviews || { weekly: {}, monthly: {} },
     weeklyFocus: state.weeklyFocus || {},
+    // V4 4b : ce que j'arrête (streak inversé : réussir = ne pas craquer)
+    quits: state.quits || [],
     schemaVersion: SCHEMA_VERSION,
   };
 }
@@ -2236,6 +2250,7 @@ function normalizeLoadedState(raw) {
     lowMode: r.lowMode || { on: false, since: null },
     reviews: { weekly: {}, monthly: {}, ...(r.reviews || {}) },
     weeklyFocus: r.weeklyFocus || {},
+    quits: r.quits || [],
     schemaVersion: r.schemaVersion || 0,
   });
 }
@@ -2286,7 +2301,7 @@ function makeObjective(data = {}) {
     status: 'active',
     children: [],
     createdAt: Date.now(),
-    reachedAt: null, statusChangedAt: null, decisions: [],
+    reachedAt: null, statusChangedAt: null, decisions: [], pillars: data.pillars || [],
   };
 }
 function makeCapNode(data = {}) {
@@ -2300,7 +2315,7 @@ function makeCapNode(data = {}) {
     status: 'active',
     children: [],
     createdAt: Date.now(),
-    reachedAt: null, statusChangedAt: null, decisions: [],
+    reachedAt: null, statusChangedAt: null, decisions: [], pillars: data.pillars || [],
   };
 }
 
@@ -2425,6 +2440,31 @@ function capDeadlineQuestionDue(node, depth, today = todayISO(), now = Date.now(
   if (depth < 1 || node.status !== 'active' || !node.deadline || node.deadline >= today) return false;
   return !(node.decisions || []).some(d => d.trigger === 'deadline' && d.forDeadline === node.deadline
     && (d.answer !== 'later' || now - d.at < CAP_LATER_MS));
+}
+
+// ============ V4 4b : PILIERS ============
+// Temps = carburant méta (mesuré, pas tagué). Les 3 piliers vitaux, Sens scindé en Lien + Alignement.
+const PILLARS = [
+  { id: 'energy', label: 'Énergie', color: '#C68729' },
+  { id: 'money', label: 'Argent', color: '#5C7A3E' },
+  { id: 'link', label: 'Lien', color: '#B8482E' },
+  { id: 'alignment', label: 'Alignement', color: '#6B4E8A' },
+];
+// Piliers effectifs d'une tâche : les siens, sinon ceux hérités de sa lignée de caps (sans rien stocker)
+function capLineagePillars(caps, capId) {
+  const path = capId ? capPathById(caps, capId) : null;
+  if (!path) return [];
+  return [...new Set(path.flatMap(n => n.pillars || []))];
+}
+function itemPillars(item, caps) {
+  return (item.pillars && item.pillars.length) ? item.pillars : capLineagePillars(caps, item.capId);
+}
+// Ce que j'arrête : jours consécutifs sans craquer (depuis le dernier écart ou le début)
+function quitStreak(q, today = todayISO()) {
+  const slips = [...(q.slips || [])].filter(d => d <= today).sort();
+  const start = slips.length ? addDays(slips[slips.length - 1], 1) : dateToISO(new Date(q.createdAt || Date.now()));
+  if (start > today) return 0;
+  return Math.round((isoToDate(today) - isoToDate(start)) / 86400000) + 1;
 }
 
 // ============ V4 4a.3 : RITUEL HEBDO ============
@@ -3183,6 +3223,8 @@ function CapApp({ session }) {
       times: Array.isArray(data.times) ? data.times : [], // V3 S(D) : créneaux multiples/jour (routines)
       slotHistory: (data.slotHistory && typeof data.slotHistory === 'object') ? data.slotHistory : {}, // V3 S(D) : créneaux faits par date
       capId: data.capId !== undefined ? data.capId : null, // V4 4a.1 : filiation optionnelle vers un cap
+      pillars: data.pillars || [], // V4 4b
+      feel: null,
       createdAt: Date.now(),
       // V3 S5 : streak devient un booléen (suivre la régularité oui/non)
       streak: data.streak === true,
@@ -3338,6 +3380,27 @@ function CapApp({ session }) {
   }
   const lowModeOn = !!(state.lowMode && state.lowMode.on);
 
+  // V4 4b : ce que j'arrête
+  function addQuit({ title, pillars }) {
+    setState(s => ({ ...s, quits: [...(s.quits || []), { id: generateId(), title, pillars: pillars || [], slips: [], createdAt: Date.now() }] }));
+  }
+  function toggleQuitSlip(id, date) {
+    let slipped = false;
+    setState(s => ({ ...s, quits: (s.quits || []).map(q => {
+      if (q.id !== id) return q;
+      const has = (q.slips || []).includes(date);
+      slipped = !has;
+      return { ...q, slips: has ? q.slips.filter(d => d !== date) : [...(q.slips || []), date] };
+    }) }));
+    const q = (state.quits || []).find(x => x.id === id);
+    if (q && !(q.slips || []).includes(date)) showToast('Noté. Le compteur repart — sans jugement.');
+  }
+  function deleteQuit(id) {
+    const q = (state.quits || []).find(x => x.id === id);
+    if (!q || !window.confirm(`Retirer « ${q.title} » ?`)) return;
+    setState(s => ({ ...s, quits: (s.quits || []).filter(x => x.id !== id) }));
+  }
+
   // V4 4a.3 : rituel hebdo
   const reviewWeek = reviewWeekFor(new Date());
   const reviewEntry = (state.reviews?.weekly || {})[reviewWeek.weekId];
@@ -3395,9 +3458,9 @@ function CapApp({ session }) {
   }
 
   // ============ TOAST ============
-  function showToast(message, action = null, duration = 3500) {
+  function showToast(message, action = null, duration = 3500, extraActions = null) {
     const id = generateId();
-    setToast({ id, message, action });
+    setToast({ id, message, action, extraActions });
     setTimeout(() => {
       setToast(t => (t && t.id === id ? { ...t, leaving: true } : t));
       setTimeout(() => setToast(t => (t && t.id === id ? null : t)), 200);
@@ -3500,10 +3563,14 @@ function CapApp({ session }) {
     if (willComplete) {
       triggerConfetti();
       // Toast avec bouton Annuler 5s
+      // V4 4b : ressenti a posteriori, facultatif (☀️ ça m'a donné de l'énergie / 😴 ça m'a vidé)
       showToast(`✓ « ${item.title.length > 30 ? item.title.slice(0, 30) + '…' : item.title} » archivée`, {
         label: 'Annuler',
         onClick: () => updateItem(item.id, { completed: false, completedAt: null }),
-      }, 5000);
+      }, 6000, [
+        { label: '☀️', title: 'Ça m\'a donné de l\'énergie', onClick: () => updateItem(item.id, { feel: 'up' }) },
+        { label: '😴', title: 'Ça m\'a vidé', onClick: () => updateItem(item.id, { feel: 'down' }) },
+      ]);
     }
   }
 
@@ -4216,6 +4283,9 @@ function CapApp({ session }) {
           {toast.action && (
             <button onClick={() => { toast.action.onClick(); setToast(null); }}>{toast.action.label}</button>
           )}
+          {(toast.extraActions || []).map(a => (
+            <button key={a.label} title={a.title} className="toast-feel" onClick={() => { a.onClick(); setToast(null); }}>{a.label}</button>
+          ))}
         </div>
       )}
 
@@ -4412,6 +4482,7 @@ function CapApp({ session }) {
         />}
 
         {view === 'routines' && <RoutinesView items={routines} categories={state.categories} onToggle={toggleComplete} onEdit={setEditingItem} onDelete={deleteItem} onAdd={() => { setEditingParentId(null); setShowAddModal(true); }} />}
+        {view === 'routines' && <QuitsSection quits={state.quits || []} onAdd={addQuit} onToggleSlip={toggleQuitSlip} onDelete={deleteQuit} />}
 
         {view === 'caps' && <BoussoleTaskCtx.Provider value={{
           categories: state.categories,
@@ -7654,6 +7725,7 @@ function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast,
           <span className="chip" style={{ color: 'var(--ink-soft)' }}>{reached ? '✓ atteint' : '○ pas encore'}</span>
         )}
         {vision && <span className="chip chip-cap" title="Vision rattachée"><IconCompass size={10} />{(vision.text.split('\n')[0] || 'Vision').slice(0, 24)}</span>}
+        {node.pillars?.length > 0 && <PillarDots pillars={node.pillars} />}
         {pace && <span className="chip cap-pace" title="Rythme : l'état des jalons comparé à leurs dates. Une indication, pas un verdict.">Rythme · {PACE_LABELS[pace]}</span>}
       </div>
 
@@ -8054,6 +8126,102 @@ function MonthlyFocusStep({ caps, visions, data, set, onCapDecision, onSetCapSta
   );
 }
 
+// V4 4b : sélection des piliers (facultatif). `inherited` = piliers hérités du cap, affichés en indice.
+function PillarPicker({ value = [], onChange, inherited = [] }) {
+  const toggle = (id) => onChange(value.includes(id) ? value.filter(x => x !== id) : [...value, id]);
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+        {PILLARS.map(p => {
+          const on = value.includes(p.id);
+          return (
+            <button key={p.id} type="button" className="pillar-chip" onClick={() => toggle(p.id)}
+              style={on ? { background: p.color, borderColor: p.color, color: '#fff' } : { borderColor: p.color, color: p.color }}>{p.label}</button>
+          );
+        })}
+      </div>
+      {!value.length && inherited.length > 0 && (
+        <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', marginTop: '0.3rem' }}>
+          Hérité du cap : {inherited.map(id => PILLARS.find(p => p.id === id)?.label).filter(Boolean).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+function PillarDots({ pillars }) {
+  if (!pillars || !pillars.length) return null;
+  return (
+    <span style={{ display: 'inline-flex', gap: '0.25rem', alignItems: 'center' }}>
+      {pillars.map(id => { const p = PILLARS.find(x => x.id === id); return p ? <span key={id} className="chip" style={{ color: p.color, borderColor: p.color }}>{p.label}</span> : null; })}
+    </span>
+  );
+}
+
+// V4 4b : « Ce que j'arrête » — streak inversé. Réussir = ne pas craquer ; craquer se dit, sans jugement.
+function QuitsSection({ quits, onAdd, onToggleSlip, onDelete }) {
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState('');
+  const [pillars, setPillars] = useState([]);
+  const today = todayISO();
+  const submit = () => { if (!title.trim()) return; onAdd({ title: title.trim(), pillars }); setTitle(''); setPillars([]); setAdding(false); };
+  return (
+    <div style={{ marginTop: '2rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <div>
+          <h3 className="display" style={{ margin: 0, fontSize: '1.25rem', fontStyle: 'italic', fontWeight: 500 }}>Ce que j'arrête</h3>
+          <div style={{ fontSize: '0.78rem', color: 'var(--ink-muted)' }}>Réussir, ici, c'est ne rien faire. Un écart se note, le compteur repart — sans jugement.</div>
+        </div>
+        {!adding && <button className="cap-btn-mini" onClick={() => setAdding(true)}><IconPlus size={12} /> Arrêter quelque chose</button>}
+      </div>
+      {adding && (
+        <div className="cap-question" style={{ marginBottom: '0.9rem' }}>
+          <input className="input" autoFocus placeholder="Ex. : scroller au lit, fumer, commander à manger" value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') submit(); }} />
+          <div style={{ margin: '0.5rem 0 0.2rem', fontSize: '0.72rem', color: 'var(--ink-muted)' }}>Ce que ça libère (facultatif) :</div>
+          <PillarPicker value={pillars} onChange={setPillars} />
+          <div style={{ display: 'flex', gap: '0.35rem', marginTop: '0.6rem' }}>
+            <button className="cap-btn-mini" disabled={!title.trim()} onClick={submit}>Ajouter</button>
+            <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => setAdding(false)}>annuler</button>
+          </div>
+        </div>
+      )}
+      {quits.length === 0 && !adding && <div style={{ fontSize: '0.82rem', color: 'var(--ink-fog)', fontStyle: 'italic' }}>Rien pour l'instant.</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+        {quits.map(q => {
+          const n = quitStreak(q, today);
+          const slippedToday = (q.slips || []).includes(today);
+          const days = Array.from({ length: 14 }, (_, i) => addDays(today, i - 13));
+          const startIso = dateToISO(new Date(q.createdAt || Date.now()));
+          return (
+            <div key={q.id} className="quit-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '0.95rem' }}>{q.title}</div>
+                  <div style={{ marginTop: '0.25rem' }}><PillarDots pillars={q.pillars} /></div>
+                </div>
+                <button className="btn-ghost" style={{ padding: '0.25rem', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-muted)' }} title="Retirer" onClick={() => onDelete(q.id)}><IconTrash size={14} /></button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', margin: '0.6rem 0' }}>
+                <span className="display" style={{ fontSize: '1.5rem', fontWeight: 600 }}>{n}</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>jour{n > 1 ? 's' : ''} sans</span>
+              </div>
+              <div style={{ display: 'flex', gap: '3px', marginBottom: '0.75rem' }}>
+                {days.map(d => {
+                  const slip = (q.slips || []).includes(d);
+                  const before = d < startIso;
+                  return <div key={d} title={formatDate(d) + (slip ? ' · écart' : '')} style={{ flex: 1, height: '14px', borderRadius: '2px', border: '1px solid var(--line)', background: before ? 'transparent' : slip ? 'var(--ink-fog)' : 'var(--moss)', opacity: before ? 0.3 : 1 }} />;
+                })}
+              </div>
+              <button className="btn" style={{ width: '100%', justifyContent: 'center' }} onClick={() => onToggleSlip(q.id, today)}>
+                {slippedToday ? 'Annuler l\'écart d\'aujourd\'hui' : 'J\'ai craqué aujourd\'hui'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CapModal({ mode, node, visions, activeObjectiveCount, onClose, onSave }) {
   const isObjective = mode === 'objective';
   const isEdit = !!node;
@@ -8068,6 +8236,7 @@ function CapModal({ mode, node, visions, activeObjectiveCount, onClose, onSave }
     measureUnit: node?.measure?.unit || '',
     measureCurrent: node?.measure?.current ?? '',
     status: node?.status || 'active',
+    pillars: node?.pillars || [],
   });
   const [titleError, setTitleError] = useState(false);
   const [whyError, setWhyError] = useState(false);
@@ -8088,6 +8257,7 @@ function CapModal({ mode, node, visions, activeObjectiveCount, onClose, onSave }
       deadline: form.deadline || null,
       status: form.status,
       measure,
+      pillars: form.pillars,
     };
     if (isObjective) {
       onSave({ ...base, visionLink: form.visionLink || null });
@@ -8149,6 +8319,12 @@ function CapModal({ mode, node, visions, activeObjectiveCount, onClose, onSave }
             </select>
           </div>
         )}
+
+        <div style={{ marginBottom: '1rem' }}>
+          <Label>Piliers servis (facultatif)</Label>
+          <PillarPicker value={form.pillars} onChange={v => set('pillars', v)} />
+          <div style={{ fontSize: '0.72rem', color: 'var(--ink-fog)', marginTop: '0.25rem' }}>Les tâches rattachées en héritent, sans rien taguer de plus.</div>
+        </div>
 
         <div style={{ marginBottom: '1rem' }}>
           <Label>Mesure (optionnelle)</Label>
@@ -8227,6 +8403,7 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
     times: (item?.times && item.times.length) ? [...item.times] : ((item?.streak && item?.time) ? [item.time] : []),
     // V4 4a.1 : filiation cap. Sous-tâche hérite du capId du parent ; sinon prefill ou existant.
     capId: item?.capId !== undefined ? item.capId : (pre.capId !== undefined ? pre.capId : (inheritFromParent ? (parentItem.capId || null) : null)),
+    pillars: item?.pillars || pre.pillars || [], // V4 4b
     // streakCount, history, lastEvaluatedPeriod conservés tels quels via le passthrough handleSave
   });
   const [showAddCat, setShowAddCat] = useState(false);
@@ -8710,6 +8887,11 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
             </div>
           );
         })()}
+
+        <div style={{ marginBottom: '1.5rem' }}>
+          <Label>Piliers (facultatif)</Label>
+          <PillarPicker value={form.pillars || []} onChange={v => setForm(f => ({ ...f, pillars: v }))} inherited={capLineagePillars(caps, form.capId)} />
+        </div>
 
         <Label>Notes</Label>
         <textarea className="input" rows="3" style={{ marginBottom: '1.5rem', resize: 'vertical', fontFamily: 'var(--font-body)' }} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Contexte, détails…" />
