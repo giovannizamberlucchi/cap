@@ -917,6 +917,8 @@ const IconFlame = (p) => <Icon {...p} d={<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c
 const IconInbox = (p) => <Icon {...p} d={<><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></>} />;
 const IconSparkles = (p) => <Icon {...p} d={<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>} />;
 const IconX = (p) => <Icon {...p} d={<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>} />;
+const IconMaximize = (p) => <Icon {...p} d={<><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></>} />;
+const IconMinimize = (p) => <Icon {...p} d={<><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></>} />;
 const IconChevronDown = (p) => <Icon {...p} d={<polyline points="6 9 12 15 18 9"/>} />;
 const IconChevronRight = (p) => <Icon {...p} d={<polyline points="9 18 15 12 9 6"/>} />;
 const IconChevronLeft = (p) => <Icon {...p} d={<polyline points="15 18 9 12 15 6"/>} />;
@@ -2684,9 +2686,22 @@ function CapApp({ session }) {
   // Rappels schedulés
   const reminderTimersRef = useRef(new Map()); // itemId -> timeoutId
 
-  // Pomodoro state — relié à une tâche active
-  const [running, setRunning] = useState(null);
-  // running = { itemId, mode: 'focus'|'break'|'longBreak', secondsLeft, totalSeconds, cycles, startedAt }
+  // V5 lot 2 : session « Démarrer » — reliée à une tâche, gardée en local sur CET appareil (survit au rechargement).
+  // running = { itemId, plan: [min de chaque tranche] | null (pomodoro classique), slice, mode: 'focus'|'break'|'longBreak'|'done',
+  //             totalSeconds, endsAt (ms, hors pause), pausedLeft (s, en pause), paused, cycles, startedAt, workedMin }
+  // Le temps restant se calcule depuis endsAt (runningLeft) : pas de dérive en arrière-plan ni après une veille.
+  const RUNNING_KEY = `${STORAGE_KEY_USER}-running`;
+  const [running, setRunning] = useState(() => {
+    try {
+      const r = JSON.parse(localStorage.getItem(RUNNING_KEY) || 'null');
+      return r && r.itemId && r.mode ? r : null;
+    } catch { return null; }
+  });
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  const commitRunning = (r) => { runningRef.current = r; setRunning(r); };
+  const [runTick, setRunTick] = useState(0); // force le rendu du chrono chaque seconde
+  const [sessionSummary, setSessionSummary] = useState(null); // V5 lot 2 : bilan après « Fini »
 
   // Apply theme
   useEffect(() => {
@@ -2812,6 +2827,7 @@ function CapApp({ session }) {
         localStorage.removeItem(STORAGE_KEY_USER);
         localStorage.removeItem(CLOUD_REV_KEY);
         localStorage.removeItem(`${STORAGE_KEY_USER}-conflict`);
+        localStorage.removeItem(RUNNING_KEY);
       } catch {}
       // 3. Sign out (le compte auth Supabase reste — à nettoyer via Edge Function plus tard)
       await sb.auth.signOut();
@@ -2828,61 +2844,40 @@ function CapApp({ session }) {
     }
   }, []);
 
-  // Pomodoro tick
+  // V5 lot 2 : session en cours persistée localement
+  useEffect(() => {
+    try {
+      if (running) localStorage.setItem(RUNNING_KEY, JSON.stringify(running));
+      else localStorage.removeItem(RUNNING_KEY);
+    } catch {}
+  }, [running]);
+
+  // V5 lot 2 : tick de la session — avance les phases échues (plusieurs d'un coup après une veille)
+  const settingsRef = useRef(state.settings);
+  settingsRef.current = state.settings;
   useEffect(() => {
     if (!running) return;
-    const interval = setInterval(() => {
-      setRunning(r => {
-        if (!r) return null;
-        if (r.secondsLeft <= 1) {
-          // fin du cycle
-          if (r.mode === 'focus') {
-            // accumulate real time on item
-            const item = findItem(state.items, r.itemId);
-            if (item) {
-              updateItem(r.itemId, {
-                actualMinutes: (item.actualMinutes || 0) + Math.round(r.totalSeconds / 60),
-                pomosDone: (item.pomosDone || 0) + 1,
-              });
-            }
-            // V4 4f : on note l'heure de fin du pomodoro (1000 dernières entrées), rien d'autre
-            const doneAt = Date.now(), min = Math.round(r.totalSeconds / 60);
-            setState(s => ({ ...s, focusLog: [...(s.focusLog || []), { at: doneAt, min, itemId: r.itemId }].slice(-1000) }));
-            playBell(880);
-            notify('Focus terminé', 'Petite pause, tu l\'as méritée 🌿');
-            const newCycles = r.cycles + 1;
-            const isLong = newCycles % state.settings.pomoCyclesBeforeLongBreak === 0;
-            const breakMin = isLong ? state.settings.pomoLongBreak : state.settings.pomoBreak;
-            return {
-              itemId: r.itemId,
-              mode: isLong ? 'longBreak' : 'break',
-              secondsLeft: breakMin * 60,
-              totalSeconds: breakMin * 60,
-              cycles: newCycles,
-              paused: false,
-              startedAt: Date.now(),
-            };
-          } else {
-            // fin de pause → relance focus
-            playBell(660);
-            notify('Pause terminée', 'On repart 💪');
-            return {
-              itemId: r.itemId,
-              mode: 'focus',
-              secondsLeft: state.settings.pomoFocus * 60,
-              totalSeconds: state.settings.pomoFocus * 60,
-              cycles: r.cycles,
-              paused: false,
-              startedAt: Date.now(),
-            };
-          }
-        }
-        if (r.paused) return r;
-        return { ...r, secondsLeft: r.secondsLeft - 1 };
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [running, state.settings, state.items]);
+    const tick = () => {
+      setRunTick(t => t + 1);
+      const r = runningRef.current;
+      if (!r) return;
+      if (hasLoadedCloudRef.current && !findItem(stateRef.current.items, r.itemId)) { commitRunning(null); return; }
+      const { next, credits, events } = stepRunning(r, Date.now(), settingsRef.current);
+      if (next === r) return;
+      credits.forEach(c => creditWork(r.itemId, c.min, c.full, c.at, true));
+      commitRunning(next);
+      const title = findItem(stateRef.current.items, r.itemId)?.title || '';
+      const last = events[events.length - 1];
+      if (last === 'planDone') { playBell(880); notify('Temps prévu écoulé', `« ${title} » — c'est fini ?`); }
+      else if (last === 'workEnd') { playBell(880); notify('Tranche terminée', 'Petite pause, tu l\'as méritée 🌿'); }
+      else if (last === 'breakEnd') { playBell(660); notify('Pause terminée', 'On repart 💪'); }
+      else if (last === 'waitResume') { showToast('Pause terminée pendant ton absence — la tranche suivante attend ▶'); }
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(interval); document.removeEventListener('visibilitychange', tick); };
+  }, [!!running]);
 
   // Notification permission
   useEffect(() => {
@@ -2950,11 +2945,12 @@ function CapApp({ session }) {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
     }
     function anyModalOpen() {
-      return showAddModal || showQuickAdd || editingItem || showSuggestion || showCheckin || showSettings || showReview;
+      return showAddModal || showQuickAdd || editingItem || showSuggestion || showCheckin || showSettings || showReview || sessionSummary;
     }
     function handleKey(e) {
       // Échap : ferme modals (priorité du plus récent au plus ancien d'apparition logique)
       if (e.key === 'Escape' && !e.isComposing) {
+        if (sessionSummary) { setSessionSummary(null); e.preventDefault(); return; }
         if (showSettings) { setShowSettings(false); e.preventDefault(); return; }
         if (showReview) { setShowReview(false); e.preventDefault(); return; }
         if (showCheckin) { setShowCheckin(false); e.preventDefault(); return; }
@@ -2962,7 +2958,7 @@ function CapApp({ session }) {
         if (editingItem) { setEditingItem(null); e.preventDefault(); return; }
         if (showAddModal) { setShowAddModal(false); setEditingParentId(null); e.preventDefault(); return; }
         if (showQuickAdd) { setShowQuickAdd(false); setQuickAddPrefill(null); e.preventDefault(); return; }
-        if (focusMode) { setFocusMode(null); e.preventDefault(); return; }
+        if (focusMode) { setFocusMode(null); e.preventDefault(); return; } // = Réduire : la session continue dans le bandeau
         // V3 S4 : Échap déselectionne tâche en dernier recours
         if (selectedItemId) { setSelectedItemId(null); e.preventDefault(); return; }
       }
@@ -2999,16 +2995,16 @@ function CapApp({ session }) {
         }
         return;
       }
-      // F : mode focus de la tâche en cours
+      // F : plein écran de la tâche en cours
       if ((e.key === 'f' || e.key === 'F') && running) {
         e.preventDefault();
         setFocusMode(running.itemId);
         return;
       }
-      // Espace : start/pause pomodoro (uniquement si une tâche tourne déjà)
+      // Espace : pause/reprise de la session (uniquement si une tâche tourne déjà)
       if (e.key === ' ' && running) {
         e.preventDefault();
-        setRunning(r => r ? { ...r, paused: !r.paused } : null);
+        pauseResume();
         return;
       }
       // V3 S4 : 1/2/3 → déplace tâche sélectionnée vers Must/Should/Want
@@ -3035,7 +3031,7 @@ function CapApp({ session }) {
     }
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [showAddModal, showQuickAdd, editingItem, showSuggestion, showCheckin, showSettings, showReview, focusMode, running, selectedItemId, state.items]);
+  }, [showAddModal, showQuickAdd, editingItem, showSuggestion, showCheckin, showSettings, showReview, focusMode, running, selectedItemId, state.items, sessionSummary]);
 
   // ============ V3 S4 : AUTO-SCROLL PENDANT DRAG ============
   // Quand le curseur approche du bord haut/bas pendant un drag, scroll auto.
@@ -3657,7 +3653,8 @@ function CapApp({ session }) {
     showToast(`${ids.size} tâche${ids.size > 1 ? 's' : ''} supprimée${ids.size > 1 ? 's' : ''} définitivement`, { label: 'Annuler', onClick: undoLastDelete });
   }
 
-  function toggleComplete(item) {
+  // opts.silent (V5 lot 2) : pas de toast — le bilan de session prend le relais (ressenti compris)
+  function toggleComplete(item, opts = {}) {
     const today = todayISO();
     // V3 S5 : si streak (ex-habitude) ou récurrence, on coche l'occurrence d'aujourd'hui
     // via le système history/exceptions, pas via item.completed.
@@ -3673,6 +3670,7 @@ function CapApp({ session }) {
     updateItem(item.id, { completed: willComplete, completedAt: willComplete ? Date.now() : null });
     if (willComplete) {
       triggerConfetti();
+      if (opts.silent) return;
       // Toast avec bouton Annuler 5s
       // V4 4b : ressenti a posteriori, facultatif (☀️ ça m'a donné de l'énergie / 😴 ça m'a vidé)
       showToast(`✓ « ${item.title.length > 30 ? item.title.slice(0, 30) + '…' : item.title} » archivée`, {
@@ -3967,37 +3965,102 @@ function CapApp({ session }) {
     setQuickCapture('');
   }
 
-  // ============ POMODORO ============
-  function startTask(itemId) {
-    setRunning({
-      itemId,
-      mode: 'focus',
-      secondsLeft: state.settings.pomoFocus * 60,
-      totalSeconds: state.settings.pomoFocus * 60,
-      cycles: 0,
-      paused: false,
-      startedAt: Date.now(),
+  // ============ DÉMARRER (V5 lot 2) ============
+  // Temps de travail enregistré sur la tâche. Tranche terminée → aussi dans focusLog (prime time) ;
+  // 🍅 seulement pour une tranche complète (≥ durée focus).
+  function creditWork(itemId, min, full, at, log) {
+    if (!min || min <= 0) return;
+    setState(s => {
+      if (!findItem(s.items, itemId)) return s;
+      const items = updateInTree(s.items, itemId, it => ({
+        actualMinutes: (it.actualMinutes || 0) + min,
+        pomosDone: (it.pomosDone || 0) + (full ? 1 : 0),
+      }));
+      const focusLog = log ? [...(s.focusLog || []), { at, min, itemId }].slice(-1000) : s.focusLog;
+      return { ...s, items, focusLog };
     });
   }
 
+  // Tranche de travail interrompue (Fini, Arrêter, autre tâche) : on enregistre le temps déjà passé.
+  function flushRunning(r) {
+    if (!r || r.mode !== 'focus') return 0;
+    const min = Math.round((r.totalSeconds - runningLeft(r, Date.now())) / 60);
+    creditWork(r.itemId, min, false, Date.now(), false);
+    return Math.max(0, min);
+  }
+
+  function startTask(itemId) {
+    const prev = runningRef.current;
+    if (prev && prev.itemId === itemId) { setFocusMode(itemId); return; }
+    const item = findItem(state.items, itemId);
+    if (!item) return;
+    if (prev) {
+      flushRunning(prev);
+      const prevItem = findItem(state.items, prev.itemId);
+      if (prevItem) showToast(`⏱ Temps enregistré sur « ${prevItem.title.length > 30 ? prevItem.title.slice(0, 30) + '…' : prevItem.title} »`);
+    }
+    const plan = buildSessionPlan(sessionPlanMinutes(item, state.settings), state.settings.pomoFocus);
+    const first = plan ? plan[0] : state.settings.pomoFocus;
+    const now = Date.now();
+    commitRunning({
+      itemId, plan, slice: 0, mode: 'focus',
+      totalSeconds: first * 60, endsAt: now + first * 60000, pausedLeft: null, paused: false,
+      cycles: 0, startedAt: now, workedMin: 0,
+    });
+    setFocusMode(itemId);
+  }
+
   function pauseResume() {
-    setRunning(r => r ? { ...r, paused: !r.paused } : null);
+    const r = runningRef.current;
+    if (!r || r.mode === 'done') return;
+    const now = Date.now();
+    if (r.paused) commitRunning({ ...r, paused: false, endsAt: now + (r.pausedLeft || 0) * 1000, pausedLeft: null });
+    else commitRunning({ ...r, paused: true, pausedLeft: runningLeft(r, now), endsAt: null });
   }
 
   function stopTask() {
-    if (running && running.mode === 'focus') {
-      const elapsedMin = Math.round((running.totalSeconds - running.secondsLeft) / 60);
-      if (elapsedMin > 0) {
-        const item = findItem(state.items, running.itemId);
-        if (item) updateItem(running.itemId, { actualMinutes: (item.actualMinutes || 0) + elapsedMin });
-      }
-    }
-    setRunning(null);
+    flushRunning(runningRef.current);
+    commitRunning(null);
+    setFocusMode(null);
   }
 
+  // Passe à la phase suivante maintenant (la tranche en cours compte pour le temps déjà passé)
   function skipPhase() {
-    if (!running) return;
-    setRunning(r => ({ ...r, secondsLeft: 1 }));
+    const r = runningRef.current;
+    if (!r || r.mode === 'done') return;
+    const now = Date.now();
+    const elapsed = r.mode === 'focus' ? r.totalSeconds - runningLeft(r, now) : r.totalSeconds;
+    const cut = { ...r, totalSeconds: elapsed, endsAt: now, paused: false, pausedLeft: null };
+    const { next, credits } = stepRunning(cut, now, state.settings);
+    credits.forEach(c => creditWork(r.itemId, c.min, c.full, c.at, true));
+    commitRunning(next);
+  }
+
+  // « +5 min » quand le temps prévu est écoulé
+  function extendSession(min = 5) {
+    const r = runningRef.current;
+    if (!r) return;
+    const plan = r.plan ? [...r.plan, min] : null;
+    commitRunning({
+      ...r, plan, slice: plan ? plan.length - 1 : r.slice + 1, mode: 'focus',
+      totalSeconds: min * 60, endsAt: Date.now() + min * 60000, pausedLeft: null, paused: false,
+    });
+  }
+
+  // « Fini » à tout moment : enregistre, arrête, coche, puis bilan neutre estimé / réel
+  function finishSession() {
+    const r = runningRef.current;
+    if (!r) return;
+    const item = findItem(state.items, r.itemId);
+    const partial = flushRunning(r);
+    commitRunning(null);
+    setFocusMode(null);
+    if (!item) return;
+    const recurring = !!(item.recurrence || item.streak);
+    const realMin = recurring ? (r.workedMin || 0) + partial : (item.actualMinutes || 0) + partial;
+    const alreadyDone = recurring ? isOccurrenceCompleted(item, todayISO()) : item.completed;
+    if (!alreadyDone) toggleComplete(item, { silent: true });
+    setSessionSummary({ itemId: item.id, title: item.title, icon: item.icon, estMin: effectiveDurationMinutes(item), realMin, recurring, feel: null });
   }
 
   // ============ SUGGESTION ============
@@ -4381,17 +4444,23 @@ function CapApp({ session }) {
     showToast('Tâche restaurée');
   }
 
+  // V5 lot 2 : vue de la session avec le temps restant calculé à l'instant (runTick force le rendu chaque seconde)
+  const runningView = running ? { ...running, secondsLeft: runningLeft(running, Date.now()), tick: runTick } : null;
+
   if (focusMode) {
     const item = findItem(state.items, focusMode);
     if (!item) { setFocusMode(null); return null; }
+    const isThis = running && running.itemId === item.id;
     return <FocusScreen
       item={item}
-      onExit={() => setFocusMode(null)}
-      running={running}
+      onReduce={() => setFocusMode(null)}
+      running={runningView}
       onStart={() => startTask(item.id)}
       onPauseResume={pauseResume}
       onStop={stopTask}
-      onComplete={() => { toggleComplete(item); setFocusMode(null); }}
+      onSkip={skipPhase}
+      onExtend={() => extendSession(5)}
+      onComplete={() => { if (isThis) finishSession(); else { toggleComplete(item); setFocusMode(null); } }}
       categories={state.categories}
     />;
   }
@@ -4399,7 +4468,7 @@ function CapApp({ session }) {
   return (
     <div>
       {/* Running banner */}
-      {running && <RunningBanner running={running} item={findItem(state.items, running.itemId)} onPauseResume={pauseResume} onStop={stopTask} onOpen={() => setFocusMode(running.itemId)} onSkip={skipPhase} />}
+      {runningView && <RunningBanner running={runningView} item={findItem(state.items, running.itemId)} onPauseResume={pauseResume} onStop={stopTask} onOpen={() => setFocusMode(running.itemId)} onSkip={skipPhase} onFinish={finishSession} onExtend={() => extendSession(5)} />}
 
       {/* Confettis */}
       {confettis.length > 0 && (
@@ -4569,7 +4638,7 @@ function CapApp({ session }) {
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <TaskCard item={item} categories={state.categories} runningId={running?.itemId}
                             onToggle={toggleComplete} onEdit={setEditingItem}
-                            onFocus={(id) => setFocusMode(id)} onStart={startTask}
+                            onStart={startTask}
                             onAddSub={(parentId) => { setEditingParentId(parentId); setShowAddModal(true); }}
                             onReorder={reorderItems} onSubtaskDrop={reparentSubtask} depth={0}
                             selectedId={selectedItemId} onSelect={setSelectedItemId}
@@ -4609,7 +4678,7 @@ function CapApp({ session }) {
                   onReorder={reorderItems}
                   onSubtaskDrop={reparentSubtask}
                   onToggle={toggleComplete} onEdit={setEditingItem}
-                  onFocus={(id) => setFocusMode(id)} onStart={startTask}
+                  onStart={startTask}
                   onAddSub={(parentId) => { setEditingParentId(parentId); setShowAddModal(true); }}
                   onTogglePin={togglePin}
                   selectedId={selectedItemId} onSelect={setSelectedItemId}
@@ -4662,7 +4731,6 @@ function CapApp({ session }) {
           onToggle: toggleComplete,
           onEdit: (it) => setEditingItem(it),
           onAddSub: (parentId) => { setEditingParentId(parentId); setShowAddModal(true); },
-          onFocus: (id) => setFocusMode(id),
           onStart: startTask,
           onReorder: reorderItems,
           onSubtaskDrop: reparentSubtask,
@@ -4848,7 +4916,10 @@ function CapApp({ session }) {
           }}
         />
       )}
-      {showSuggestion && <SuggestionModal task={suggestedTask} categories={state.categories} onClose={() => setShowSuggestion(false)} onFocus={(id) => { setShowSuggestion(false); setFocusMode(id); }} onStart={(id) => { setShowSuggestion(false); startTask(id); setFocusMode(id); }} />}
+      {sessionSummary && <SessionSummaryModal summary={sessionSummary}
+        onFeel={(f) => { const nf = sessionSummary.feel === f ? null : f; updateItem(sessionSummary.itemId, { feel: nf }); setSessionSummary(ss => ss && { ...ss, feel: nf }); }}
+        onClose={() => setSessionSummary(null)} />}
+      {showSuggestion && <SuggestionModal task={suggestedTask} categories={state.categories} onClose={() => setShowSuggestion(false)} onStart={(id) => { setShowSuggestion(false); startTask(id); }} />}
       {showCheckin && <CheckinModal currentMode={todayCapacity?.mode} onClose={() => setShowCheckin(false)} onSelect={(preset, hours) => { setState(s => ({ ...s, capacity: { ...s.capacity, [today]: { mode: preset, hours } } })); setShowCheckin(false); }} />}
       {showReview && <WeeklyReviewModal state={state} lowMode={lowModeOn} week={reviewWeek} extraSteps={reviewExtraSteps}
         onClose={() => setShowReview(false)} onFinish={finishReview}
@@ -4859,26 +4930,144 @@ function CapApp({ session }) {
 }
 
 // ============ RUNNING BANNER ============
-function RunningBanner({ running, item, onPauseResume, onStop, onOpen, onSkip }) {
+// ============ V5 LOT 2 : SESSION « DÉMARRER » ============
+// Plan de la session (minutes de chaque tranche de travail) à partir de la durée prévue :
+//  ≤ D → une tranche ; > D → D, D, …, reste (un reste < 5 min s'ajoute à la dernière tranche) ;
+//  pas de durée → null = pomodoro classique en boucle.
+function buildSessionPlan(planMin, D) {
+  if (!planMin || planMin <= 0) return null;
+  if (planMin <= D) return [planMin];
+  const slices = [];
+  let rest = planMin;
+  while (rest > D) { slices.push(D); rest -= D; }
+  if (rest < 5) slices[slices.length - 1] += rest;
+  else slices.push(rest);
+  return slices;
+}
+
+// Durée à planifier : estimé − temps déjà passé (min 5) ; estimation dépassée → une tranche D.
+// Récurrentes : toujours la durée complète (leur temps cumulé couvre toutes les occurrences).
+function sessionPlanMinutes(item, settings) {
+  const est = effectiveDurationMinutes(item);
+  if (!est) return 0;
+  if (item.recurrence || item.streak) return est;
+  const done = item.actualMinutes || 0;
+  if (done <= 0) return est;
+  if (done < est) return Math.max(5, est - done);
+  return settings.pomoFocus;
+}
+
+// Secondes restantes de la phase en cours (calculées depuis l'heure de fin : pas de dérive).
+function runningLeft(r, now) {
+  if (!r || r.mode === 'done') return 0;
+  if (r.paused) return r.pausedLeft || 0;
+  return Math.max(0, Math.ceil((r.endsAt - now) / 1000));
+}
+
+// Avance la session jusqu'à `now`. Les phases s'enchaînent sur l'horaire prévu (pas sur l'heure du tick).
+// Une pause finie depuis plus d'une minute (Cap endormi / fermé) ne relance pas seule la tranche suivante :
+// elle attend en pause → au plus une tranche comptée pendant une absence.
+// Retourne { next, credits: [{ min, full, at }], events }.
+function stepRunning(r, now, settings) {
+  const credits = [], events = [];
+  let cur = r;
+  let guard = 0;
+  while (cur && !cur.paused && cur.mode !== 'done' && cur.endsAt <= now && guard++ < 50) {
+    const late = now - cur.endsAt > 60000;
+    if (cur.mode === 'focus') {
+      const min = Math.round(cur.totalSeconds / 60);
+      credits.push({ min, full: cur.totalSeconds >= settings.pomoFocus * 60, at: cur.endsAt });
+      const cycles = cur.cycles + 1;
+      const workedMin = (cur.workedMin || 0) + min;
+      if (cur.plan && cur.slice >= cur.plan.length - 1) {
+        cur = { ...cur, mode: 'done', cycles, workedMin, endsAt: null, pausedLeft: null, totalSeconds: 0 };
+        events.push('planDone');
+        break;
+      }
+      const isLong = cycles % (settings.pomoCyclesBeforeLongBreak || 4) === 0;
+      const breakMin = isLong ? settings.pomoLongBreak : settings.pomoBreak;
+      cur = { ...cur, mode: isLong ? 'longBreak' : 'break', cycles, workedMin, totalSeconds: breakMin * 60, endsAt: cur.endsAt + breakMin * 60000 };
+      events.push('workEnd');
+    } else {
+      const slice = cur.slice + 1;
+      const dur = cur.plan ? cur.plan[slice] : settings.pomoFocus;
+      if (late) {
+        cur = { ...cur, mode: 'focus', slice, totalSeconds: dur * 60, paused: true, pausedLeft: dur * 60, endsAt: null };
+        events.push('waitResume');
+        break;
+      }
+      cur = { ...cur, mode: 'focus', slice, totalSeconds: dur * 60, endsAt: cur.endsAt + dur * 60000 };
+      events.push('breakEnd');
+    }
+  }
+  return { next: cur, credits, events };
+}
+
+function sessionModeLabel(r) {
+  if (!r) return '';
+  if (r.mode === 'done') return 'Temps prévu écoulé';
+  if (r.mode === 'longBreak') return 'Longue pause';
+  if (r.mode === 'break') return 'Pause';
+  if (r.plan && r.plan.length > 1) return `Tranche ${Math.min(r.slice + 1, r.plan.length)}/${r.plan.length}`;
+  if (!r.plan) return `Pomodoro ${r.slice + 1}`;
+  return 'Focus';
+}
+
+function RunningBanner({ running, item, onPauseResume, onStop, onOpen, onSkip, onFinish, onExtend }) {
   const min = Math.floor(running.secondsLeft / 60);
   const sec = running.secondsLeft % 60;
-  const modeLabel = running.mode === 'focus' ? 'Focus' : running.mode === 'longBreak' ? 'Longue pause' : 'Pause';
-  const modeColor = running.mode === 'focus' ? 'var(--rust)' : 'var(--moss)';
+  const done = running.mode === 'done';
+  const modeLabel = sessionModeLabel(running) + (running.paused ? ' · en pause' : '');
+  const modeColor = running.mode === 'focus' ? 'var(--rust)' : done ? 'var(--ochre)' : 'var(--moss)';
+  const btn = { background: 'transparent', color: 'var(--paper)', border: '1px solid var(--paper)', padding: '0.2rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.75rem' };
   return (
     <div className="running-banner">
       <div className="running-pulse" style={{ background: modeColor }} />
       <span style={{ fontWeight: 600 }}>{modeLabel}</span>
-      <span className="mono">{String(min).padStart(2, '0')}:{String(sec).padStart(2, '0')}</span>
-      {item && <span style={{ flex: 1, opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} onClick={onOpen} >· {item.title}</span>}
-      <button onClick={onPauseResume} style={{ background: 'transparent', color: 'var(--paper)', border: '1px solid var(--paper)', padding: '0.2rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.75rem' }}>
-        {running.paused ? <IconPlay size={12} /> : <IconPause size={12} />}
-      </button>
-      <button onClick={onSkip} style={{ background: 'transparent', color: 'var(--paper)', border: '1px solid var(--paper)', padding: '0.2rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.75rem' }} title="Passer à la phase suivante">
-        ⏭
-      </button>
-      <button onClick={onStop} style={{ background: 'transparent', color: 'var(--paper)', border: '1px solid var(--paper)', padding: '0.2rem 0.5rem', borderRadius: '3px', cursor: 'pointer', fontSize: '0.75rem' }} title="Arrêter">
-        <IconStop size={12} />
-      </button>
+      {!done && <span className="mono">{String(min).padStart(2, '0')}:{String(sec).padStart(2, '0')}</span>}
+      <span style={{ flex: 1, opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }} onClick={onOpen}>{item ? `· ${item.title}` : ''}</span>
+      {done ? (
+        <button onClick={onExtend} style={btn} title="Encore 5 minutes">+5 min</button>
+      ) : (
+        <>
+          <button onClick={onPauseResume} style={btn} title={running.paused ? 'Reprendre' : 'Pause'}>
+            {running.paused ? <IconPlay size={12} /> : <IconPause size={12} />}
+          </button>
+          <button onClick={onSkip} style={btn} title="Passer à la phase suivante">⏭</button>
+        </>
+      )}
+      <button onClick={onFinish} style={btn} title="Fini"><IconCheck size={12} /></button>
+      <button onClick={onStop} style={btn} title="Arrêter (le temps passé est gardé)"><IconStop size={12} /></button>
+      <button onClick={onOpen} style={btn} title="Plein écran (F)"><IconMaximize size={12} /></button>
+    </div>
+  );
+}
+
+// V5 lot 2 : bilan neutre après « Fini » — estimé / réel, ressenti facultatif. Pas de verdict.
+function SessionSummaryModal({ summary, onFeel, onClose }) {
+  const { title, icon, estMin, realMin, recurring, feel } = summary;
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} onKeyDown={e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); onClose(); } }} tabIndex={-1} ref={el => el && el.focus()} style={{ maxWidth: '440px', textAlign: 'center', outline: 'none' }}>
+        <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.15em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '0.75rem' }}>Fini</div>
+        <h2 className="display" style={{ fontSize: '1.6rem', fontWeight: 500, fontStyle: 'italic', margin: '0 0 1rem 0' }}>
+          ✓ {icon && <span style={{ marginRight: '0.3rem' }}>{icon}</span>}« {title} »
+        </h2>
+        <div className="mono session-summary-times" style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', fontSize: '0.85rem', marginBottom: '1.2rem' }}>
+          <div><div style={{ fontSize: '0.65rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Estimé</div>{estMin > 0 ? fmtMin(estMin) : '—'}</div>
+          <div><div style={{ fontSize: '0.65rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{recurring ? 'Réel (cette fois)' : 'Réel'}</div>{realMin > 0 ? fmtMin(realMin) : '< 1 min'}</div>
+        </div>
+        {!recurring && (
+          <div style={{ marginBottom: '1.2rem' }}>
+            <div style={{ fontSize: '0.8rem', color: 'var(--ink-muted)', marginBottom: '0.4rem' }}>Et toi, ça t'a fait quoi ? <span style={{ color: 'var(--ink-fog)' }}>(facultatif)</span></div>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+              <button className="btn" style={{ borderColor: feel === 'up' ? 'var(--ochre)' : undefined }} onClick={() => onFeel('up')}>☀️ Énergie</button>
+              <button className="btn" style={{ borderColor: feel === 'down' ? 'var(--ochre)' : undefined }} onClick={() => onFeel('down')}>😴 Vidé</button>
+            </div>
+          </div>
+        )}
+        <button className="btn btn-rust" onClick={onClose}>Fermer</button>
+      </div>
     </div>
   );
 }
@@ -5540,7 +5729,7 @@ function ArchiveView({ archivedItems, categories, searchQuery, searchScopes, set
 }
 
 // ============ COLUMN ============
-function Column({ colKey, column, categories, onDrop, onReorder, onToggle, onEdit, onFocus, onStart, onAddSub, onSubtaskDrop, runningId, selectedId, onSelect, manualOrder, onResetManual, searchHighlight, onTogglePin }) {
+function Column({ colKey, column, categories, onDrop, onReorder, onToggle, onEdit, onStart, onAddSub, onSubtaskDrop, runningId, selectedId, onSelect, manualOrder, onResetManual, searchHighlight, onTogglePin }) {
   const [dragOver, setDragOver] = useState(false);
   return (
     <div className={`column column-${colKey} ${dragOver ? 'drag-over' : ''}`}
@@ -5567,7 +5756,7 @@ function Column({ colKey, column, categories, onDrop, onReorder, onToggle, onEdi
         {column.items.length === 0 ? (
           <div style={{ fontSize: '0.8rem', color: 'var(--ink-fog)', fontStyle: 'italic', padding: '1rem 0' }}>Glisse une tâche ici</div>
         ) : (
-          column.items.map(item => <TaskCard key={item.id} item={item} categories={categories} runningId={runningId} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} onStart={onStart} onAddSub={onAddSub} onReorder={onReorder} onSubtaskDrop={onSubtaskDrop} depth={0} selectedId={selectedId} onSelect={onSelect} searchHighlight={searchHighlight} onTogglePin={onTogglePin} />)
+          column.items.map(item => <TaskCard key={item.id} item={item} categories={categories} runningId={runningId} onToggle={onToggle} onEdit={onEdit} onStart={onStart} onAddSub={onAddSub} onReorder={onReorder} onSubtaskDrop={onSubtaskDrop} depth={0} selectedId={selectedId} onSelect={onSelect} searchHighlight={searchHighlight} onTogglePin={onTogglePin} />)
         )}
       </div>
     </div>
@@ -5575,7 +5764,7 @@ function Column({ colKey, column, categories, onDrop, onReorder, onToggle, onEdi
 }
 
 // ============ TASK CARD (récursive avec sous-tâches) ============
-function TaskCard({ item, categories, onToggle, onEdit, onFocus, onStart, onAddSub, onReorder, onSubtaskDrop, depth = 0, runningId, parentItem = null, selectedId, onSelect, defaultExpanded = false, searchHighlight = '', onTogglePin }) {
+function TaskCard({ item, categories, onToggle, onEdit, onStart, onAddSub, onReorder, onSubtaskDrop, depth = 0, runningId, parentItem = null, selectedId, onSelect, defaultExpanded = false, searchHighlight = '', onTogglePin }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [dropPosition, setDropPosition] = useState(null); // 'before' | 'after' | 'center' | null
   const [subtaskDragOver, setSubtaskDragOver] = useState(false);
@@ -5769,10 +5958,7 @@ function TaskCard({ item, categories, onToggle, onEdit, onFocus, onStart, onAddS
             <button className="btn-ghost" style={{ padding: '0.2rem', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-muted)' }} onClick={(e) => { e.stopPropagation(); onAddSub(item.id); }} title="Ajouter sous-tâche">
               <IconPlus size={12} />
             </button>
-            <button className="btn-ghost" style={{ padding: '0.2rem', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-muted)' }} onClick={(e) => { e.stopPropagation(); onFocus(item.id); }} title="Mode focus">
-              <IconTarget size={12} />
-            </button>
-            <button className="btn-ghost" style={{ padding: '0.2rem', border: 'none', background: 'transparent', cursor: 'pointer', color: isRunning ? 'var(--rust)' : 'var(--ink-muted)' }} onClick={(e) => { e.stopPropagation(); onStart(item.id); }} title="Démarrer">
+            <button className="btn-ghost" style={{ padding: '0.2rem', border: 'none', background: 'transparent', cursor: 'pointer', color: isRunning ? 'var(--rust)' : 'var(--ink-muted)' }} onClick={(e) => { e.stopPropagation(); onStart(item.id); }} title={isRunning ? 'En cours — ouvrir' : 'Démarrer'}>
               <IconPlay size={12} />
             </button>
           </div>
@@ -5782,7 +5968,7 @@ function TaskCard({ item, categories, onToggle, onEdit, onFocus, onStart, onAddS
       {hasSubtasks && expanded && (
         <div className="subtask">
           {item.subtasks.map(sub => (
-            <TaskCard key={sub.id} item={sub} categories={categories} runningId={runningId} onToggle={onToggle} onEdit={onEdit} onFocus={onFocus} onStart={onStart} onAddSub={onAddSub} onReorder={onReorder} onSubtaskDrop={onSubtaskDrop} depth={depth + 1} parentItem={item} selectedId={selectedId} onSelect={onSelect} defaultExpanded={defaultExpanded} searchHighlight={searchHighlight} onTogglePin={onTogglePin} />
+            <TaskCard key={sub.id} item={sub} categories={categories} runningId={runningId} onToggle={onToggle} onEdit={onEdit} onStart={onStart} onAddSub={onAddSub} onReorder={onReorder} onSubtaskDrop={onSubtaskDrop} depth={depth + 1} parentItem={item} selectedId={selectedId} onSelect={onSelect} defaultExpanded={defaultExpanded} searchHighlight={searchHighlight} onTogglePin={onTogglePin} />
           ))}
         </div>
       )}
@@ -8011,7 +8197,7 @@ function CapNode({ node, depth, visions, tasksByCap, parentMap, isFirst, isLast,
                 <TaskCard key={t.id} item={t} depth={0}
                   categories={taskOps.categories}
                   onToggle={taskOps.onToggle} onEdit={taskOps.onEdit}
-                  onFocus={taskOps.onFocus} onStart={taskOps.onStart} onAddSub={taskOps.onAddSub}
+                  onStart={taskOps.onStart} onAddSub={taskOps.onAddSub}
                   onReorder={taskOps.onReorder} onSubtaskDrop={taskOps.onSubtaskDrop}
                   onTogglePin={taskOps.onTogglePin} runningId={taskOps.runningId}
                   selectedId={taskOps.selectedId} onSelect={taskOps.onSelect} />
@@ -9761,8 +9947,8 @@ function TimeInput({ value, onChange, style, className }) {
 }
 
 // ============ SUGGESTION MODAL ============
-function SuggestionModal({ task, categories, onClose, onFocus, onStart }) {
-  // V3 S4 : Entrée valide → Go (si task) ou ferme (si pas de task)
+function SuggestionModal({ task, categories, onClose, onStart }) {
+  // V3 S4 : Entrée valide → Démarrer (si task) ou ferme (si pas de task)
   const handleKey = (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -9791,8 +9977,7 @@ function SuggestionModal({ task, categories, onClose, onFocus, onStart }) {
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button className="btn" onClick={onClose}>Plus tard</button>
-              <button className="btn" onClick={() => onFocus(task.id)}><IconTarget size={14} /> Mode focus</button>
-              <button className="btn btn-rust" onClick={() => onStart(task.id)}><IconPlay size={14} /> Go</button>
+              <button className="btn btn-rust" onClick={() => onStart(task.id)}><IconPlay size={14} /> Démarrer</button>
             </div>
           </>
         ) : (
@@ -9961,8 +10146,8 @@ function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpd
           <kbd>N</kbd><span>Capture rapide</span>
           <kbd>Shift+N</kbd><span>Nouvel item complet</span>
           <kbd>/</kbd><span>Focus capture rapide</span>
-          <kbd>F</kbd><span>Mode focus (tâche en cours)</span>
-          <kbd>Espace</kbd><span>Pause / reprise pomodoro</span>
+          <kbd>F</kbd><span>Plein écran de la tâche en cours</span>
+          <kbd>Espace</kbd><span>Pause / reprise de la tâche en cours</span>
           <span style={{ whiteSpace: 'nowrap' }}><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd></span><span>Déplacer la tâche sélectionnée vers Must / Should / Want</span>
           <kbd>Entrée</kbd><span>Valider la fenêtre ouverte</span>
         </div>
@@ -10019,21 +10204,24 @@ function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpd
 }
 
 // ============ FOCUS SCREEN ============
-function FocusScreen({ item, onExit, running, onStart, onPauseResume, onStop, onComplete, categories }) {
+function FocusScreen({ item, onReduce, running, onStart, onPauseResume, onStop, onSkip, onExtend, onComplete, categories }) {
   const cat = categories.find(c => c.id === item.categoryId);
   const isRunningThis = running && running.itemId === item.id;
+  const done = isRunningThis && running.mode === 'done';
   const seconds = isRunningThis ? running.secondsLeft : 0;
-  const total = isRunningThis ? running.totalSeconds : 1;
+  const total = isRunningThis && running.totalSeconds ? running.totalSeconds : 1;
   const min = Math.floor(seconds / 60);
   const sec = seconds % 60;
-  const pct = isRunningThis ? seconds / total : 0;
-  const modeLabel = isRunningThis
-    ? (running.mode === 'focus' ? 'Focus' : running.mode === 'longBreak' ? 'Longue pause' : 'Pause')
-    : '';
+  const pct = done ? 1 : isRunningThis ? seconds / total : 0;
+  const modeLabel = isRunningThis ? sessionModeLabel(running) + (running.paused ? ' · en pause' : '') : '';
+  // Plan en petites barres (tranche faite / en cours / à venir), seulement s'il y a plusieurs tranches
+  const plan = isRunningThis && running.plan && running.plan.length > 1 ? running.plan : null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'var(--paper)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '2rem', zIndex: 50, overflow: 'auto' }}>
-      <button className="btn" onClick={onExit} style={{ position: 'absolute', top: '1.5rem', right: '1.5rem' }}><IconX size={14} /> Quitter</button>
+      <button className="btn" onClick={onReduce} style={{ position: 'absolute', top: '1.5rem', right: '1.5rem' }} title={isRunningThis ? 'La session continue dans le bandeau (Échap)' : 'Fermer (Échap)'}>
+        {isRunningThis ? <><IconMinimize size={14} /> Réduire</> : <><IconX size={14} /> Fermer</>}
+      </button>
 
       <div className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--ink-muted)', marginBottom: '1rem' }}>Une seule chose · Rien d'autre</div>
 
@@ -10053,7 +10241,7 @@ function FocusScreen({ item, onExit, running, onStart, onPauseResume, onStop, on
         </div>
       )}
 
-      <div style={{ width: '260px', aspectRatio: 1, marginBottom: '1.5rem' }}>
+      <div style={{ width: '260px', maxWidth: '70vw', aspectRatio: 1, marginBottom: plan ? '0.75rem' : '1.5rem' }}>
         <svg viewBox="0 0 200 200" style={{ width: '100%', height: '100%' }}>
           <circle cx="100" cy="100" r="92" fill="var(--paper-2)" stroke="var(--ink)" strokeWidth="1.5" />
           {Array.from({ length: 60 }).map((_, i) => {
@@ -10065,7 +10253,7 @@ function FocusScreen({ item, onExit, running, onStart, onPauseResume, onStop, on
           <PomoSector pct={pct} mode={isRunningThis ? running.mode : 'focus'} />
           <circle cx="100" cy="100" r="4" fill="var(--ink)" />
           <text x="100" y="108" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="22" fill="var(--ink)" fontWeight="500">
-            {isRunningThis ? `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : '—'}
+            {done ? '⏰' : isRunningThis ? `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : '—'}
           </text>
           {isRunningThis && (
             <text x="100" y="135" textAnchor="middle" fontFamily="DM Sans, sans-serif" fontSize="10" fill="var(--ink-muted)">{modeLabel}</text>
@@ -10073,18 +10261,41 @@ function FocusScreen({ item, onExit, running, onStart, onPauseResume, onStop, on
         </svg>
       </div>
 
+      {plan && (
+        <div className="session-plan" title="Plan de la session" style={{ display: 'flex', gap: '4px', alignItems: 'center', marginBottom: '1.5rem', width: '260px', maxWidth: '70vw' }}>
+          {plan.map((m, i) => {
+            const past = i < running.slice || (i === running.slice && running.mode !== 'focus');
+            const current = i === running.slice && running.mode === 'focus';
+            return (
+              <div key={i} style={{ flex: m, height: '6px', borderRadius: '3px', background: past ? 'var(--rust)' : current ? 'color-mix(in srgb, var(--rust) 45%, transparent)' : 'var(--line)', outline: current ? '1px solid var(--rust)' : 'none' }} title={`${m} min`} />
+            );
+          })}
+        </div>
+      )}
+
+      {done && (
+        <div className="display" style={{ fontSize: '1.1rem', fontStyle: 'italic', color: 'var(--ink-soft)', marginBottom: '1rem', textAlign: 'center' }}>Temps prévu écoulé. C'est fini ?</div>
+      )}
+
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
         {!isRunningThis ? (
           <button className="btn btn-rust" onClick={onStart}><IconPlay size={14} /> Démarrer</button>
+        ) : done ? (
+          <>
+            <button className="btn btn-rust" onClick={onComplete}><IconCheck size={14} /> Fini</button>
+            <button className="btn" onClick={onExtend}>+5 min</button>
+            <button className="btn" onClick={onStop}>Je m'arrête là</button>
+          </>
         ) : (
           <>
             <button className="btn btn-primary" onClick={onPauseResume}>
               {running.paused ? <><IconPlay size={14} /> Reprendre</> : <><IconPause size={14} /> Pause</>}
             </button>
-            <button className="btn" onClick={onStop}><IconStop size={14} /> Arrêter</button>
+            <button className="btn" onClick={onSkip} title="Passer à la phase suivante (le temps déjà passé est gardé)">⏭ {running.mode !== 'focus' ? 'Reprendre le travail' : running.plan && running.slice >= running.plan.length - 1 ? 'Terminer la tranche' : 'Aller à la pause'}</button>
+            <button className="btn" onClick={onStop} title="Le temps passé est gardé"><IconStop size={14} /> Arrêter</button>
           </>
         )}
-        <button className="btn" onClick={onComplete}><IconCheck size={14} /> Fini</button>
+        {!done && <button className="btn" onClick={onComplete}><IconCheck size={14} /> Fini</button>}
       </div>
 
       {item.actualMinutes > 0 && effectiveDurationMinutes(item) > 0 && (

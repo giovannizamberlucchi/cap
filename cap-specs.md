@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lot 1 en prod le 2026-09-23**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lot 1 en prod le 2026-09-23 · lot 2 (« Démarrer ») codé, en preview**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -105,7 +105,7 @@ App de productivité TDAH. Web déployée → futur mobile natif éventuel.
 
 ### Suggestion "Je commence par quoi ?"
 - Scoring : priorité (Must +100, Should +50, Want +20) + date (aujourd'hui +80, demain +40) + **deadline (en retard +200, ≤1j +120, ≤3j +60, ≤7j +30)** + quick win (≤15min +15)
-- Modal avec actions : plus tard / mode focus / go pomodoro
+- Modal avec actions : plus tard / ▶ Démarrer (V5 lot 2 ; Entrée = Démarrer)
 
 ### Calendrier (V3 S2B + S3)
 - 3 vues : **jour / semaine / mois**
@@ -279,18 +279,17 @@ App de productivité TDAH. Web déployée → futur mobile natif éventuel.
 - Ne bloque pas l'ajout de tâches
 - Présente dans le header global et dans la colonne droite vue jour (version compacte)
 
-### Pomodoro avec cycles
-- Cycles automatiques : focus → pause → focus → longue pause
-- Durées toutes réglables dans Réglages
-- Bandeau permanent en haut quand une tâche tourne
-- Compteur réel cumulé sur la tâche
-
-### Mode focus plein écran
-- Plein écran sur une seule tâche
-- Affiche sous-tâches en dessous
-- Disque pomodoro géant
-- Boutons start/pause/stop/fini
-- Durée affichée = durée effective (somme sous-tâches si auto)
+### Session « Démarrer » (V5 lot 2 — remplace « Pomodoro avec cycles » + « Mode focus »)
+- **Une seule action ▶ Démarrer** (carte de tâche, suggestion) : lance le chrono ET ouvre le plein écran. ▶ sur la tâche déjà en cours = rouvre le plein écran.
+- **Plein écran** (disque géant, sous-tâches, plan en barres) ⇄ **bandeau** (Réduire / Échap ; ⤢ ou F pour revenir). La session continue dans les deux.
+- **Plan** (D = durée focus des réglages) : tâche ≤ D → une tranche = sa durée ; > D → D, pause, D, …, reste (reste < 5 min ajouté à la dernière tranche) ; sans durée → pomodoro classique en boucle. Pauses / longue pause selon réglages. Tâche entamée → plan sur estimé − déjà passé (min 5 ; estimation dépassée → une tranche D) ; récurrentes → toujours la durée complète.
+- **Fin du plan** : cloche + « Temps prévu écoulé. C'est fini ? » → ✓ Fini / +5 min / Je m'arrête là.
+- **Fini** (à tout moment, plein écran ou bandeau) : temps enregistré, chrono arrêté, tâche cochée (occurrence du jour pour une récurrente), puis **bilan neutre** « Estimé X · Réel Y » (réel = cumul de la tâche ; « cette fois » pour une récurrente) + ressenti ☀️/😴 facultatif (tâches non récurrentes). Pas de toast dans ce cas.
+- **Arrêter / Je m'arrête là** : temps enregistré, pas de bilan. **⏭** : passe à la phase suivante, le temps déjà passé est gardé.
+- **Démarrer une autre tâche** pendant une session : le temps de la première est enregistré (toast).
+- **Chrono fiable** : temps restant calculé depuis l'heure de fin (`endsAt`), pas de dérive en arrière-plan / veille. Session gardée en localStorage (`cap-app-v2-<user>-running`, cet appareil seulement) → survit au rechargement. Les phases s'enchaînent sur l'horaire prévu ; une pause terminée depuis > 1 min (Cap endormi/fermé) ne relance pas seule la tranche suivante : elle attend en pause (au plus une tranche comptée pendant une absence).
+- **Comptage** : chaque tranche terminée → `actualMinutes` + entrée `focusLog` (prime time) ; 🍅 (`pomosDone`) seulement pour une tranche complète (≥ D). Tranche interrompue → `actualMinutes` seulement.
+- Raccourcis : F = plein écran de la session, Espace = pause/reprise.
 
 ### Catégories
 - 4 par défaut : Travail / Perso / Santé / Admin
@@ -321,9 +320,9 @@ App de productivité TDAH. Web déployée → futur mobile natif éventuel.
 - `N` → ajout rapide (V3 S3, avant : modale complète)
 - `Shift+N` → modale complète (V3 S3)
 - `/` → focus capture rapide
-- `F` → mode focus tâche en cours
-- `Espace` → pause/reprise pomodoro
-- `Échap` → ferme modal (hiérarchie : settings > checkin > suggestion > editingItem > showAddModal > showQuickAdd > focusMode > **désélection tâche**)
+- `F` → plein écran de la session en cours
+- `Espace` → pause/reprise de la session
+- `Échap` → ferme modal (hiérarchie : bilan de session > settings > checkin > suggestion > editingItem > showAddModal > showQuickAdd > plein écran de session (= Réduire) > **désélection tâche**)
 - `Cmd/Ctrl+Z` → undo dernière opération (V3 S4 : stack unifiée prof 10 incluant delete, complete, reorder, reparent, postpone, priority)
 - `Entrée` → valide la modale ouverte avec validation contextuelle (titre rempli, important = date+heure ou deadline). Sinon shake + bordure rouge + toast.
 - **`1` / `2` / `3`** → déplace la tâche sélectionnée vers Must / Should / Want (V3 S4, nécessite avoir cliqué sur une tâche pour la sélectionner)
@@ -606,8 +605,13 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
   - Tri par échéance : case « Trier par échéance » (persistée `settings.sortByDeadline`) à côté de « Afficher les récurrentes » ; liste unique groupée En retard / Aujourd'hui / Cette semaine / Ce mois-ci / Plus tard / Sans échéance, étiquette de priorité par ligne. Échéance effective = la plus proche entre la tâche et ses sous-tâches ouvertes. Recherche et filtres s'appliquent. RDV importants exclus (ils vivent dans le bandeau).
   - Mode sombre : bouton « + Nouvelle » catégorie (fond blanc) corrigé, `.btn-ghost` transparent par défaut ; raccourcis 1/2/3 sur une ligne dans Réglages ; en-tête qui ne se tasse plus quand le badge RDV est long.
 
-### Lot 2 — S6 « Démarrer » (spec d'origine)
-Une seule action « Démarrer » ; plein écran par défaut, bascule mini-fenêtre ; tâche ≤ D (focus pomodoro) → démarre sur sa durée estimée, bilan estimé/réel ; tâche > D → tranches D → pause → … → reste.
+### Lot 2 — S6 « Démarrer » ✅ codé (2026-09-23, en preview)
+Spec d'origine : une seule action « Démarrer » ; plein écran par défaut, bascule mini-fenêtre ; tâche ≤ D (focus pomodoro) → démarre sur sa durée estimée, bilan estimé/réel ; tâche > D → tranches D → pause → … → reste.
+- **Cadrage validé** : bouton 🎯 « Mode focus » retiré (cartes + suggestion) ; « Quitter » remplacé par Réduire / Arrêter / Fini ; relance d'une tâche entamée sur le reste ; reste < 5 min fusionné ; bilan neutre + ressenti ; **ajout hors spec d'origine** : chrono sur heure de fin + session persistée localement.
+- **Bugs corrigés** : « Fini » en plein écran laissait tourner le chrono sans enregistrer le temps ; démarrer une autre tâche écrasait le chrono sans enregistrer son temps.
+- Détail : voir « Session « Démarrer » » dans la partie V3 (fonctionnel). Code : `buildSessionPlan`, `sessionPlanMinutes`, `runningLeft`, `stepRunning` (pur), `startTask` / `finishSession` / `extendSession` / `skipPhase` / `stopTask` dans l'app, `SessionSummaryModal`. `toggleComplete(item, { silent })`.
+- Pas de changement de schéma (session locale, hors `state`). Pas de push (lot 3) : cloche + notification locale si Cap ouvert.
+- **Reporté** : Démarrer depuis l'agenda (overlay vue Jour).
 
 ### Lot 3 — PWA + push
 - **Technique** : service worker écrit à la main (`sw.js`) + `manifest.webmanifest`, **pas de build** (Workbox et Vite écartés). Icônes PNG tirées du CapMark (192, 512, maskable).
@@ -1029,7 +1033,7 @@ Session découpée en 4 lots, validés et codés successivement (schema 7 → 9)
 
 **En réserve (issu de cette session, non fait)** : lanes en vue semaine, halos prep/trajet alignés sur les lanes, reflow live des voisins pendant un resize.
 
-#### Session 6 — Refonte action Démarrer (reportée)
+#### Session 6 — Refonte action Démarrer (→ V5 lot 2, codé)
 - **Fusion Mode focus + Démarrer tâche → 1 seule action "Démarrer"**
 - **UX par défaut** : plein écran (mode focus actuel)
 - **Bascule** : bouton pour passer en mini-modale (mode actuel "tâche en cours" / bandeau)
