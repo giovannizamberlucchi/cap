@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) codé, en preview**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -571,7 +571,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-3 en prod, lots 4-9 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-3 en prod, lot 4 en preview, lots 5-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -622,11 +622,30 @@ Ajouté au cadrage le 2026-09-24 : passer au build **avant** la PWA (qui en dép
 - Rien d'autre : pas de découpage en modules, pas de TypeScript, pas de lint (plus tard, progressivement). Données, clés localStorage, Supabase, schéma v14 : inchangés.
 - **Vérifié** : mêmes parcours et mêmes données sur l'ancienne et la nouvelle version, 25 captures comparées au pixel (tous les onglets, agenda jour/semaine/mois/année, modales, sombre, mobile, Démarrer) → identiques, hors animations en cours ; même état final des données ; aucune erreur JS. Bundle : 170 Ko gzip (+ 6 Ko CSS) au lieu de React + Babel standalone + source JSX.
 
-### Lot 4 — PWA + push
-- **Technique** (révisée après la migration Vite du lot 3, à confirmer au cadrage) : `vite-plugin-pwa` (Workbox) — manifest généré, précache des fichiers du build (noms hachés) et des polices, mise à jour de l'app installée ; service worker complété pour la réception du push et le clic sur la notification → ouvre la tâche. Icônes PNG tirées du CapMark (192, 512, maskable). *(Avant la migration : `sw.js` écrit à la main, sans build.)*
-- **Push** : table Supabase des rappels des 14 prochains jours (réécrite à chaque sauvegarde) + table des abonnements push ; Edge Function lancée chaque minute (pg_cron) qui envoie les rappels dus (Web Push, clés VAPID). Gratuit à cette échelle. Première brique serveur hors du front.
-- **Limite** : sur iPhone, push seulement si Cap est installé sur l'écran d'accueil (iOS 16.4+).
-- **À trancher au cadrage** — reco : envoyer aussi en push les fins de tranche / de pause des sessions « Démarrer » (même circuit : une ligne de rappel à l'heure de fin prévue, mise à jour à chaque pause/arrêt).
+### Lot 4 — PWA + push ✅ codé (2026-09-24, en preview)
+**Cadrage validé** (2026-09-24) : PWA installable et hors ligne, push via Supabase, **+ rappels sur les récurrentes / routines** (manque constaté : le rappel était masqué dès qu'il y avait une récurrence) **+ push des fins de phase « Démarrer »**. Plus de demande d'autorisation au premier clic.
+
+**PWA**
+- `vite-plugin-pwa` en `injectManifest` : service worker maison `src/sw.js` (Workbox) — précache du build, navigation → `index.html` précaché, Google Fonts en cache (CSS revalidée, polices 1 an), réception du push, clic sur la notification.
+- Manifest généré (Cap, papier `#F4EFE6`, standalone, fr) ; icônes `public/icons/` (192, 512, maskable 512, apple-touch 180, badge 96 monochrome) générées depuis le mark du favicon ; balises iOS dans `index.html`.
+- **Mise à jour** : `registerType: 'prompt'` → `main.jsx` enregistre le SW (`registerSW`) et émet `cap:need-refresh` → toast « ✨ Nouvelle version de Cap · Recharger » (jamais de rechargement forcé). Remplace le « recharge tous tes onglets » après une mise en prod (à partir de la version suivante).
+
+**Rappels (calcul unique)**
+- `computeReminders(items, now, 14)` : tâches datées avec heure + rappel (heure de partir si RDV avec trajet), **et occurrences des récurrentes / routines** (un rappel par créneau pour les routines multi-créneaux ; occurrences cochées, sautées, créneaux faits exclus ; récurrences flottantes exclues faute d'heure). Clé stable `r:<item>:<date>T<heure>:<délai>`.
+- `sessionReminders(running, titre, réglages)` : simule l'enchaînement prévu d'une session (sans pause, 12 phases max) → fins de tranche / de pause / temps prévu écoulé. Effacés à la pause, à l'arrêt, sur Fini ; recréés à la reprise.
+- Modale : « Rappel · à chaque occurrence » proposé aussi pour une récurrente / routine à heure fixe.
+- **Minuteurs locaux** (Cap ouvert) : même calcul ; **désactivés sur un appareil abonné au push** (et `notify()` muet) → pas de doublon ; la cloche et les toasts de session restent.
+
+**Push (Supabase, première brique serveur)**
+- Tables `push_subscriptions` (un abonnement par appareil et par compte, `unique(user_id, endpoint)`) et `reminders` (`primary key (user_id, key)`, `sent_at`), RLS « les siens ».
+- L'app réécrit les rappels à venir (2 s après un changement de tâches ou de session, + toutes les heures / au retour sur l'onglet) : upsert par clé + suppression des rappels futurs disparus ; un rappel déjà envoyé n'est jamais renvoyé ; `test:*` jamais supprimés par l'app.
+- Edge Function **`send-reminders`** (Deno, `verify_jwt` off, protégée par l'en-tête `x-cap-cron`) appelée **chaque minute par pg_cron** (`cap-send-reminders`, pg_net) : réclame les rappels dus en une requête UPDATE (pas de double envoi), abandonne ceux en retard de plus de 10 min, chiffre avec `web-push` (`generateRequestDetails`) et envoie en `fetch` natif (TTL 10 min, urgence haute), supprime les abonnements morts (404/410), purge les rappels de plus de 2 jours.
+- **Secrets générés dans Supabase, jamais ailleurs** : `cap_cron_secret` (aléatoire, en base), paire VAPID P-256 générée par la fonction au premier appel (WebCrypto) et rangée dans le Vault (`cap_push_store_vapid`, une seule fois). L'app lit la clé **publique** via `cap_vapid_public_key()` (autorisé aux connectés, voulu). Config lue par `cap_push_config()` (clé de service uniquement).
+- SQL versionné dans `supabase/migrations/`, fonction dans `supabase/functions/send-reminders/`. `pg_net` dans le schéma `extensions`.
+- **Clic sur une notification** : ramène Cap au premier plan (message `cap:open-item`) ou l'ouvre sur `/?item=<id>` → modale de la tâche (ou plein écran si c'est la session en cours).
+- **Réglages › Notifications** (par appareil) : Activer / Désactiver / « Envoyer une notification de test » (arrive dans la minute) ; états refusé / non géré / « sur iPhone, installe d'abord Cap ». Déconnexion = l'appareil ne reçoit plus les notifications du compte ; suppression du compte = abonnements et rappels effacés.
+- **Vérifié** : chiffrement Web Push sous Deno (déchiffrement contrôlé), chaîne serveur de bout en bout (rappel dû → envoi → abonnement mort supprimé), calcul des rappels (routine 2 créneaux, heure de partir, hebdo, flottante exclue, coche → retiré), rappels de session (5 phases, pause / reprise / arrêt), SW actif, hors ligne, lien `?item=`, toast de mise à jour ; non-régression visuelle (seuls les Réglages changent). **La réception réelle d'une notification ne se teste que sur un vrai appareil.**
+- **Limites** : iPhone → Cap installé sur l'écran d'accueil (iOS 16.4+) ; précision ~1 min (pg_cron) ; les fins de phase d'une session sont envoyées à **tous** les appareils abonnés du compte.
 
 ### Lot 5 — Synchro
 En cas de conflit (compare-and-swap refusé) : **fusion à 3 voies par tâche** (dernière version commune gardée en local, version locale, version cloud) au lieu d'adopter tout le cloud et de mettre le local de côté. Conflit sur une même tâche : la modification la plus récente gagne, l'autre reste en stash.

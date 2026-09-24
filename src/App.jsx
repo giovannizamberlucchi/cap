@@ -16,6 +16,46 @@ const SUPABASE_URL = 'https://hrsdzqwgpklzqvhltowz.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_PaES5uiS-4ShcbGipvMb6g_KkJ_nT5a';
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// V5 lot 4 : ce que CET appareil sait faire en matière de notifications push
+function isIOSDevice() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+function isStandaloneApp() {
+  return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+}
+function pushSupportStatus() {
+  const ok = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  if (!ok) return isIOSDevice() && !isStandaloneApp() ? 'ios-install' : 'unsupported';
+  if (Notification.permission === 'denied') return 'denied';
+  return 'off';
+}
+function urlB64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+
+// V5 lot 4 : réécrit côté Supabase les rappels à venir (table `reminders`), lus chaque minute par la
+// fonction `send-reminders`. Upsert par clé stable (jamais de doublon, un rappel déjà envoyé le reste)
+// + suppression des rappels futurs qui n'existent plus. Les rappels de test ne sont jamais supprimés ici.
+async function syncRemindersToCloud(userId, list) {
+  const { data: existing, error } = await sb.from('reminders').select('key')
+    .eq('user_id', userId).is('sent_at', null).gt('due_at', new Date().toISOString());
+  if (error) { console.error('reminders select', error); return false; }
+  const want = new Set(list.map(r => r.key));
+  const toDelete = (existing || []).map(e => e.key).filter(k => !want.has(k) && !k.startsWith('test:'));
+  if (list.length) {
+    const rows = list.map(r => ({ user_id: userId, key: r.key, due_at: new Date(r.dueAt).toISOString(), title: r.title, body: r.body, item_id: r.itemId || null, kind: r.kind }));
+    const { error: e2 } = await sb.from('reminders').upsert(rows, { onConflict: 'user_id,key' });
+    if (e2) { console.error('reminders upsert', e2); return false; }
+  }
+  if (toDelete.length) {
+    const { error: e3 } = await sb.from('reminders').delete().eq('user_id', userId).is('sent_at', null).in('key', toDelete);
+    if (e3) { console.error('reminders delete', e3); return false; }
+  }
+  return true;
+}
+
 // ============ CLOUD SYNC HELPERS ============
 async function cloudLoad(userId) {
   try {
@@ -679,6 +719,64 @@ function isOccurrenceCompleted(item, iso) {
     return item.exceptions?.[iso] === 'completed';
   }
   return !!item.completed;
+}
+
+// ============ V5 LOT 4 : RAPPELS — calcul unique (minuteurs locaux + notifications push) ============
+const REMINDER_WINDOW_DAYS = 14;
+
+function reminderLabel(min) {
+  return min === 0 ? 'maintenant' :
+    min === 1440 ? 'demain' :
+    min >= 60 ? `dans ${Math.round(min / 60)}h` :
+    `dans ${min} min`;
+}
+
+// Rappels à venir sur [now, now + 14 j] : tâches datées avec heure + rappel, et (V5 lot 4) occurrences
+// des tâches récurrentes / routines — un rappel par créneau pour les routines multi-créneaux.
+// RDV avec trajet aller : le rappel se cale sur l'heure de départ (V3 S4.5).
+// Retourne [{ key, itemId, dueAt (ms), title, body, kind }] trié ; key stable = tâche + heure prévue + délai.
+function computeReminders(items, now = Date.now(), days = REMINDER_WINDOW_DAYS) {
+  const out = [];
+  const horizon = now + days * 86400000;
+  const fromISO = dateToISO(new Date(now));
+  const toISO = addDays(fromISO, days + 1);
+  const add = (it, dateISO, time) => {
+    const reminderMin = parseInt(it.reminder, 10);
+    if (isNaN(reminderMin)) return;
+    const at = new Date(`${dateISO}T${time}:00`).getTime();
+    if (isNaN(at)) return;
+    const travelMin = (it.isImportant && typeof it.travelDuration === 'number' && it.travelDuration > 0) ? it.travelDuration : 0;
+    const dueAt = at - travelMin * 60000 - reminderMin * 60000;
+    if (dueAt <= now || dueAt > horizon) return;
+    out.push({
+      key: `r:${it.id}:${dateISO}T${time}:${reminderMin}`,
+      itemId: it.id,
+      dueAt,
+      title: travelMin > 0 ? '🧭 Cap — Départ' : '🧭 Cap — Rappel',
+      body: travelMin > 0 ? `🚗 Heure de partir pour « ${it.title} » (RDV à ${time})` : `« ${it.title} » ${reminderLabel(reminderMin)}`,
+      kind: travelMin > 0 ? 'travel' : 'task',
+    });
+  };
+  for (const it of flattenItems(items)) {
+    if (!it.reminder) continue;
+    if (!it.recurrence) {
+      if (!it.completed && it.date && it.time) add(it, it.date, it.time);
+      continue;
+    }
+    const multi = (it.streak && Array.isArray(it.times) && it.times.length >= 2) ? it.times : null;
+    for (const o of getOccurrencesInRange(it, fromISO, toISO)) {
+      if (o.status === 'completed' || o.status === 'skipped') continue;
+      if (multi) {
+        const done = (it.slotHistory || {})[o.date] || [];
+        multi.forEach(t => { if (t && !done.includes(t)) add(it, o.date, t); });
+        continue;
+      }
+      if (isOccurrenceCompleted(it, o.date)) continue;
+      const t = o.time || it.time;
+      if (t) add(it, o.date, t);
+    }
+  }
+  return out.sort((a, b) => a.dueAt - b.dueAt);
 }
 
 // ============ V3 S5 : RÉCURRENCE FLOTTANTE ============
@@ -1889,6 +1987,17 @@ function CapApp({ session }) {
   const [runTick, setRunTick] = useState(0); // force le rendu du chrono chaque seconde
   const [sessionSummary, setSessionSummary] = useState(null); // V5 lot 2 : bilan après « Fini »
 
+  // V5 lot 4 : notifications push sur CET appareil. status : on | off | denied | unsupported | ios-install | busy
+  const PUSH_KEY = `${STORAGE_KEY_USER}-push`;
+  const [pushInfo, setPushInfo] = useState(() => {
+    let endpoint = null;
+    try { endpoint = localStorage.getItem(PUSH_KEY); } catch {}
+    const st = pushSupportStatus();
+    return { status: endpoint && st === 'off' && Notification.permission === 'granted' ? 'on' : st, endpoint };
+  });
+  const pushActiveRef = useRef(false);
+  pushActiveRef.current = pushInfo.status === 'on';
+
   // Apply theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', state.settings.theme);
@@ -1996,6 +2105,7 @@ function CapApp({ session }) {
     if (cloudStatus === 'syncing') {
       if (!confirm('Sync en cours. Te déconnecter quand même ?')) return;
     }
+    await removePushSubscription(); // V5 lot 4 : cet appareil ne reçoit plus les notifications de ce compte
     await sb.auth.signOut();
   }
 
@@ -2008,12 +2118,17 @@ function CapApp({ session }) {
         alert('Erreur lors de la suppression : ' + error.message);
         return;
       }
+      // V5 lot 4 : abonnements push et rappels
+      await removePushSubscription();
+      await sb.from('reminders').delete().eq('user_id', userId);
+      await sb.from('push_subscriptions').delete().eq('user_id', userId);
       // 2. Clear local cache
       try {
         localStorage.removeItem(STORAGE_KEY_USER);
         localStorage.removeItem(CLOUD_REV_KEY);
         localStorage.removeItem(`${STORAGE_KEY_USER}-conflict`);
         localStorage.removeItem(RUNNING_KEY);
+        localStorage.removeItem(PUSH_KEY);
       } catch {}
       // 3. Sign out (le compte auth Supabase reste — à nettoyer via Edge Function plus tard)
       await sb.auth.signOut();
@@ -2065,63 +2180,171 @@ function CapApp({ session }) {
     return () => { clearInterval(interval); document.removeEventListener('visibilitychange', tick); };
   }, [!!running]);
 
-  // Notification permission
-  useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') {
-      const ask = () => { Notification.requestPermission(); document.removeEventListener('click', ask); };
-      document.addEventListener('click', ask, { once: true });
-    }
-  }, []);
+  // V5 lot 4 : plus de demande d'autorisation au premier clic — l'activation se fait dans Réglages › Notifications.
 
-  // ============ RAPPELS (setTimeout — ne marche que si onglet ouvert) ============
+  // ============ RAPPELS LOCAUX (minuteurs — onglet ouvert) ============
+  // V5 lot 4 : même calcul que le push (computeReminders). Sur un appareil abonné au push, c'est le push
+  // qui notifie (même Cap fermé) → pas de minuteur local, pour éviter les doublons.
+  const [reminderTick, setReminderTick] = useState(0);
   useEffect(() => {
-    // Clear tous les anciens timers
+    const id = setInterval(() => setReminderTick(t => t + 1), 3600000); // l'horizon de 14 jours glisse
+    const onVis = () => { if (document.visibilityState === 'visible') setReminderTick(t => t + 1); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+  useEffect(() => {
     reminderTimersRef.current.forEach(id => clearTimeout(id));
     reminderTimersRef.current.clear();
-
-    // Scan toutes les tâches non-complétées avec date+time+reminder
-    const all = flattenItems(state.items);
+    if (pushInfo.status === 'on') return;
     const now = Date.now();
-    for (const it of all) {
-      if (it.completed || !it.date || !it.time || !it.reminder) continue;
-      // V3 S5 : tâches récurrentes filtrées par !it.date (pas de date one-shot)
-      const reminderMin = parseInt(it.reminder, 10);
-      if (isNaN(reminderMin)) continue;
-      // date+time format : "YYYY-MM-DD" + "HH:MM"
-      const dueAt = new Date(`${it.date}T${it.time}:00`).getTime();
-      if (isNaN(dueAt)) continue;
-      // V3 S4.5 : si l'item a un trajet aller, le rappel se cale sur l'heure de départ (= time - travelDuration),
-      // pas sur l'heure du RDV. Permet de sortir à temps.
-      const travelMin = (it.isImportant && typeof it.travelDuration === 'number' && it.travelDuration > 0) ? it.travelDuration : 0;
-      const triggerAt = dueAt - travelMin * 60 * 1000 - reminderMin * 60 * 1000;
-      const delay = triggerAt - now;
-      if (delay <= 0) continue; // rappel déjà passé, on skip
-      // setTimeout limite à 2^31-1 ms (~24.8j). Au-delà on skip pour cette session.
-      if (delay > 2147483647) continue;
+    for (const r of computeReminders(state.items, now)) {
+      const delay = r.dueAt - now;
+      if (delay > 2147483647) continue; // limite setTimeout (~24,8 j)
       const tid = setTimeout(() => {
-        const label = reminderMin === 0 ? 'maintenant' :
-                      reminderMin === 1440 ? 'demain' :
-                      reminderMin >= 60 ? `dans ${Math.round(reminderMin / 60)}h` :
-                      `dans ${reminderMin} min`;
-        // V3 S4.5 : label spécial si trajet → on rappelle l'heure de partir
-        const body = travelMin > 0
-          ? `🚗 Heure de partir pour « ${it.title} » (RDV à ${it.time})`
-          : `« ${it.title} » ${label}`;
-        const title = travelMin > 0 ? '🧭 Cap — Départ' : '🧭 Cap — Rappel';
-        notify(title, body);
+        notify(r.title, r.body);
         // Fallback toast si notif refusée
         if (!('Notification' in window) || Notification.permission !== 'granted') {
-          showToast(`${travelMin > 0 ? '🚗' : '🧭'} ${body}`, null, 6000);
+          showToast(`${r.kind === 'travel' ? '' : '🧭 '}${r.body}`, null, 6000);
         }
         playBell(660);
       }, delay);
-      reminderTimersRef.current.set(it.id, tid);
+      reminderTimersRef.current.set(r.key, tid);
     }
     return () => {
       reminderTimersRef.current.forEach(id => clearTimeout(id));
       reminderTimersRef.current.clear();
     };
-  }, [state.items]);
+  }, [state.items, pushInfo.status, reminderTick]);
+
+  // ============ V5 LOT 4 : RAPPELS PUSH (Supabase) ============
+  // Chaque appareil connecté réécrit les rappels des 14 prochains jours (+ fins de phase de la session
+  // en cours) ; la fonction serveur les envoie aux appareils abonnés, même Cap fermé.
+  const lastReminderSyncRef = useRef('');
+  useEffect(() => {
+    if (!hasLoadedCloud) return;
+    const t = setTimeout(async () => {
+      const r = runningRef.current;
+      const runTitle = r ? (findItem(stateRef.current.items, r.itemId)?.title || '') : '';
+      const list = [...computeReminders(stateRef.current.items), ...sessionReminders(r, runTitle, settingsRef.current)];
+      const sig = JSON.stringify(list.map(x => [x.key, x.title, x.body]));
+      if (sig === lastReminderSyncRef.current) return;
+      if (await syncRemindersToCloud(userId, list)) lastReminderSyncRef.current = sig;
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [state.items, running, hasLoadedCloud, reminderTick]);
+
+  // Vérifie l'abonnement réel de l'appareil au démarrage (autorisation retirée, abonnement expiré…)
+  useEffect(() => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    let cancelled = false;
+    navigator.serviceWorker.getRegistration().then(reg => reg ? reg.pushManager.getSubscription() : null).then(sub => {
+      if (cancelled) return;
+      if (sub && Notification.permission === 'granted') {
+        savePushSubscription(sub).catch(() => {});
+      } else if (pushInfo.endpoint) {
+        try { localStorage.removeItem(PUSH_KEY); } catch {}
+        setPushInfo({ status: pushSupportStatus(), endpoint: null });
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  async function savePushSubscription(sub) {
+    const j = sub.toJSON();
+    const { error } = await sb.from('push_subscriptions').upsert({
+      user_id: userId, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+      user_agent: navigator.userAgent.slice(0, 200),
+    }, { onConflict: 'user_id,endpoint' });
+    if (error) throw error;
+    try { localStorage.setItem(PUSH_KEY, j.endpoint); } catch {}
+    setPushInfo({ status: 'on', endpoint: j.endpoint });
+  }
+
+  async function enablePush() {
+    const st = pushSupportStatus();
+    if (st === 'unsupported' || st === 'ios-install') { setPushInfo(p => ({ ...p, status: st })); return; }
+    setPushInfo(p => ({ ...p, status: 'busy' }));
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { setPushInfo({ status: perm === 'denied' ? 'denied' : 'off', endpoint: null }); return; }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) throw new Error('service worker absent');
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        // Clé publique VAPID lue dans Supabase (la paire y est générée ; la clé privée n'en sort jamais)
+        const { data: vapidPublic, error: ev } = await sb.rpc('cap_vapid_public_key');
+        if (ev || !vapidPublic) throw ev || new Error('clé VAPID pas encore disponible');
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(vapidPublic) });
+      }
+      await savePushSubscription(sub);
+      lastReminderSyncRef.current = ''; // force une réécriture des rappels
+      setReminderTick(t => t + 1);
+      showToast('🔔 Notifications activées sur cet appareil');
+    } catch (e) {
+      console.error(e);
+      setPushInfo({ status: pushSupportStatus(), endpoint: null });
+      showToast('⚠ Impossible d\'activer les notifications sur cet appareil', null, 5000);
+    }
+  }
+
+  async function removePushSubscription() {
+    try {
+      const reg = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : null;
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
+      const endpoint = (sub && sub.endpoint) || pushInfo.endpoint;
+      if (endpoint) await sb.from('push_subscriptions').delete().eq('user_id', userId).eq('endpoint', endpoint);
+      if (sub) await sub.unsubscribe();
+    } catch (e) { console.error(e); }
+    try { localStorage.removeItem(PUSH_KEY); } catch {}
+  }
+
+  async function disablePush() {
+    setPushInfo(p => ({ ...p, status: 'busy' }));
+    await removePushSubscription();
+    setPushInfo({ status: pushSupportStatus(), endpoint: null });
+    showToast('Notifications désactivées sur cet appareil');
+  }
+
+  async function testPush() {
+    const { error } = await sb.from('reminders').insert({
+      user_id: userId, key: `test:${Date.now()}`, due_at: new Date().toISOString(),
+      title: '🧭 Cap — Test', body: 'Les notifications marchent sur cet appareil.', item_id: null, kind: 'test',
+    });
+    showToast(error ? '⚠ Test impossible (réseau ?)' : '🔔 Test envoyé — la notification arrive dans la minute', null, 5000);
+  }
+
+  // Clic sur une notification (service worker) ou lien ?item=… → ouvre la tâche (ou sa session en cours)
+  function openItemFromNotification(itemId) {
+    if (!itemId) return;
+    const it = findItem(stateRef.current.items, itemId);
+    if (!it) return;
+    if (runningRef.current && runningRef.current.itemId === itemId) { setFocusMode(itemId); return; }
+    setEditingItem(it);
+  }
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const id = params.get('item');
+      if (id) {
+        openItemFromNotification(id);
+        params.delete('item');
+        const q = params.toString();
+        window.history.replaceState(null, '', window.location.pathname + (q ? `?${q}` : '') + window.location.hash);
+      }
+    } catch {}
+    if (!('serviceWorker' in navigator)) return;
+    const onMsg = (e) => { if (e.data && e.data.type === 'cap:open-item') openItemFromNotification(e.data.itemId); };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg);
+  }, []);
+
+  // V5 lot 4 : nouvelle version de Cap disponible (service worker) → proposer, jamais forcer
+  useEffect(() => {
+    const onNeed = () => showToast('✨ Nouvelle version de Cap', { label: 'Recharger', onClick: () => window.__capUpdateSW && window.__capUpdateSW(true) }, 3600000);
+    window.addEventListener('cap:need-refresh', onNeed);
+    if (window.__capNeedRefresh) onNeed();
+    return () => window.removeEventListener('cap:need-refresh', onNeed);
+  }, []);
 
   // ============ RACCOURCIS CLAVIER ============
   useEffect(() => {
@@ -2262,6 +2485,7 @@ function CapApp({ session }) {
   }
 
   function notify(title, body) {
+    if (pushActiveRef.current) return; // V5 lot 4 : appareil abonné → c'est le push qui notifie
     if ('Notification' in window && Notification.permission === 'granted') {
       try { new Notification(title, { body }); } catch {}
     }
@@ -4110,7 +4334,8 @@ function CapApp({ session }) {
       {showReview && <WeeklyReviewModal state={state} lowMode={lowModeOn} week={reviewWeek} extraSteps={reviewExtraSteps}
         onClose={() => setShowReview(false)} onFinish={finishReview}
         onCapDecision={recordCapDecision} onSetCapStatus={setCapStatus} onUpdateCap={updateCap} onAddNudgeTask={addNudgeTask} />}
-      {showSettings && <SettingsModal settings={state.settings} categories={state.categories} userEmail={userEmail} onClose={() => setShowSettings(false)} onSave={(newSettings) => setState(s => ({ ...s, settings: newSettings }))} onUpdateCategories={(cats) => setState(s => ({ ...s, categories: cats }))} onDeleteAccount={handleDeleteAccount} />}
+      {showSettings && <SettingsModal settings={state.settings} categories={state.categories} userEmail={userEmail} onClose={() => setShowSettings(false)} onSave={(newSettings) => setState(s => ({ ...s, settings: newSettings }))} onUpdateCategories={(cats) => setState(s => ({ ...s, categories: cats }))} onDeleteAccount={handleDeleteAccount}
+        push={{ status: pushInfo.status, onEnable: enablePush, onDisable: disablePush, onTest: testPush }} />}
     </div>
   );
 }
@@ -4187,6 +4412,26 @@ function stepRunning(r, now, settings) {
     }
   }
   return { next: cur, credits, events };
+}
+
+// V5 lot 4 : fins de phase à venir d'une session en cours (pour les notifications push, Cap fermé).
+// On simule l'enchaînement prévu (sans pause) : tranche → pause → … → temps prévu écoulé. 12 phases max.
+function sessionReminders(r, title, settings) {
+  if (!r || r.paused || r.mode === 'done' || !r.endsAt) return [];
+  const out = [];
+  let cur = r;
+  for (let i = 0; i < 12 && cur && !cur.paused && cur.mode !== 'done' && cur.endsAt; i++) {
+    const at = cur.endsAt;
+    const { next, events } = stepRunning(cur, at, settings);
+    const ev = events[events.length - 1];
+    const [t, b] = ev === 'planDone' ? ['Temps prévu écoulé', `« ${title} » — c'est fini ?`]
+      : ev === 'workEnd' ? ['Tranche terminée', 'Petite pause, tu l\'as méritée 🌿']
+      : ['Pause terminée', 'On repart 💪'];
+    out.push({ key: `s:${r.itemId}:${r.startedAt}:${at}`, itemId: r.itemId, dueAt: at, title: `⏱ ${t}`, body: b, kind: 'session' });
+    if (!ev || next === cur) break;
+    cur = next;
+  }
+  return out;
 }
 
 function sessionModeLabel(r) {
@@ -8771,10 +9016,10 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
           </>
         )}
 
-        {/* RAPPEL — V3 S5 : seulement si one-shot date+heure (pas pour récurrents) */}
-        {!form.recurrence && (
+        {/* RAPPEL — one-shot ; V5 lot 4 : aussi récurrentes / routines à heure fixe (chaque occurrence, chaque créneau) */}
+        {(!form.recurrence || (!isFloatingRecurrence(form.recurrence) && (form.time || (form.times || []).some(Boolean)))) && (
           <>
-            <Label>Rappel</Label>
+            <Label>Rappel{form.recurrence ? ' · à chaque occurrence' : ''}</Label>
             <select className="input" style={{ marginBottom: '0.3rem' }} value={form.reminder} onChange={e => setForm(f => ({ ...f, reminder: e.target.value }))}>
               <option value="">Aucun</option>
               <option value="0">À l'heure prévue</option>
@@ -8786,7 +9031,7 @@ function ItemModal({ item, parentId, parentItem, categories, caps = [], visions 
             </select>
             {form.reminder && (
               <div style={{ fontSize: '0.7rem', color: 'var(--ink-muted)', marginBottom: '1rem', fontStyle: 'italic' }}>
-                ⓘ Rappel local — nécessite Cap ouvert dans un onglet
+                ⓘ Cap fermé : seulement sur les appareils où les notifications sont activées (Réglages › Notifications){form.recurrence && form.streak && (form.times || []).filter(Boolean).length >= 2 ? ' · un rappel par créneau' : ''}
               </div>
             )}
             {!form.reminder && <div style={{ marginBottom: '1rem' }} />}
@@ -9073,6 +9318,37 @@ function DurationInput({ value, onChange }) {
   );
 }
 
+// V5 lot 4 : Réglages › Notifications (par appareil)
+function NotificationsSettings({ push }) {
+  const { status, onEnable, onDisable, onTest } = push;
+  const note = { fontSize: '0.75rem', color: 'var(--ink-muted)', lineHeight: 1.45 };
+  return (
+    <>
+      <Label>Notifications</Label>
+      <div style={{ marginBottom: '1rem' }}>
+        {status === 'on' && (
+          <>
+            <div style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>🔔 Activées sur cet appareil — rappels et fins de tranche arrivent même Cap fermé.</div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button className="btn" onClick={onTest}>Envoyer une notification de test</button>
+              <button className="btn" onClick={onDisable}>Désactiver sur cet appareil</button>
+            </div>
+          </>
+        )}
+        {(status === 'off' || status === 'busy') && (
+          <>
+            <div style={{ ...note, marginBottom: '0.5rem' }}>Reçois tes rappels, l'heure de partir et les fins de tranche même quand Cap est fermé. À activer sur chaque appareil.</div>
+            <button className="btn btn-rust" onClick={onEnable} disabled={status === 'busy'}>{status === 'busy' ? '…' : '🔔 Activer sur cet appareil'}</button>
+          </>
+        )}
+        {status === 'denied' && <div style={note}>Les notifications sont bloquées pour Cap dans ce navigateur. Autorise-les dans les réglages du site (icône à gauche de l'adresse), puis reviens ici.</div>}
+        {status === 'ios-install' && <div style={note}>Sur iPhone, les notifications ne marchent que si Cap est installé : bouton Partager › « Sur l'écran d'accueil », puis ouvre Cap depuis l'icône et reviens ici.</div>}
+        {status === 'unsupported' && <div style={note}>Ce navigateur ne gère pas les notifications push. Les rappels restent affichés quand Cap est ouvert.</div>}
+      </div>
+    </>
+  );
+}
+
 function Label({ children }) {
   return <label className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--ink-muted)', display: 'block', marginBottom: '0.3rem' }}>{children}</label>;
 }
@@ -9234,7 +9510,7 @@ function CheckinModal({ currentMode, onClose, onSelect }) {
 }
 
 // ============ SETTINGS MODAL ============
-function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpdateCategories, onDeleteAccount }) {
+function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpdateCategories, onDeleteAccount, push }) {
   const [form, setForm] = useState({ ...settings });
   const [editingCats, setEditingCats] = useState(categories);
   const [newCatName, setNewCatName] = useState('');
@@ -9324,6 +9600,8 @@ function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpd
             }}><IconPlus size={14} /></button>
           </div>
         </div>
+
+        {push && <NotificationsSettings push={push} />}
 
         <Label>Raccourcis clavier</Label>
         <div style={{ fontSize: '0.8rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.4rem 0.75rem', alignItems: 'center' }}>
