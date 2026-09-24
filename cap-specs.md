@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) codé, en preview**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -571,7 +571,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-2 en prod, lot 3 en preview, lots 4-9 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-3 en prod, lots 4-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -614,7 +614,7 @@ Spec d'origine : une seule action « Démarrer » ; plein écran par défaut, ba
 - Pas de changement de schéma (session locale, hors `state`). Pas de push (lot 4) : cloche + notification locale si Cap ouvert.
 - **Reporté** : Démarrer depuis l'agenda (overlay vue Jour).
 
-### Lot 3 — Migration vers React + Vite ✅ codé (2026-09-24, en preview)
+### Lot 3 — Migration vers React + Vite ✅ en prod (2026-09-24)
 Ajouté au cadrage le 2026-09-24 : passer au build **avant** la PWA (qui en dépend : `vite-plugin-pwa`) et supprimer la compilation Babel dans le navigateur (~1-2 s à chaque ouverture sur téléphone, fichier au-delà de la limite de 500 Ko de Babel). SvelteKit écarté (réécriture complète de ~10 000 lignes, rendu serveur inutile pour une app privée derrière un login).
 - **Migration mécanique** : le script Babel devient `src/App.jsx` **tel quel** (imports React / supabase-js en tête, `export default AuthGate`), le CSS devient `src/styles.css` tel quel, `src/main.jsx` fait le rendu, `index.html` ne garde que le `<head>` (titre, favicon, Google Fonts) et `<div id="root">`. Seule ligne de code changée : `window.supabase.createClient` → `createClient` importé.
 - **Dépendances npm figées** (`package-lock.json`) : react / react-dom 18.3.1, @supabase/supabase-js 2.108.2 (mêmes versions que les CDN) ; dev : vite 8, @vitejs/plugin-react 6. Node 22.
