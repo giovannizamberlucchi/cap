@@ -1,2 +1,6 @@
 # Checklists de test — documents de travail, non versionnés
 cap-*-checklist.md
+
+# Build Vite (V5 lot 3)
+node_modules/
+dist/

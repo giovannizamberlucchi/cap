@@ -14,8 +14,9 @@ Cap est une app de productivité pensée pour un cerveau TDAH (le mot n'apparaî
 - 1 conversation = 1 mission claire.
 
 ## Stack
-- Un seul fichier **`index.html`** : React 18 + Babel standalone via CDN (unpkg), **pas de build**. Typo Fraunces / DM Sans / JetBrains Mono ; thème papier crème, mode sombre via `[data-theme="dark"]` et variables CSS (`--ink`, `--paper`, `--rust`, `--ocean`, `--ochre`, `--moss`, `--violet`…).
-- **Supabase** : auth email/mot de passe + table `cap_data` (`user_id`, `data` JSONB, `rev`, `updated_at`), RLS. Client nommé `sb` (pas `supabase`).
+- **React 18 + Vite** (depuis V5 lot 3). Toute l'app est dans **`src/App.jsx`** (un seul module, migré tel quel depuis l'ancien `index.html`), le CSS dans **`src/styles.css`**, le rendu dans `src/main.jsx` ; `index.html` ne garde que le `<head>` (titre, favicon, Google Fonts). Dépendances npm figées par `package-lock.json` (react 18.3.1, @supabase/supabase-js 2.108.2). `npm run dev` pour le local, `npm run build` → `dist/`. Pas de TypeScript, pas de lint ; découpage en modules seulement s'il est validé.
+- Typo Fraunces / DM Sans / JetBrains Mono ; thème papier crème, mode sombre via `[data-theme="dark"]` et variables CSS (`--ink`, `--paper`, `--rust`, `--ocean`, `--ochre`, `--moss`, `--violet`…).
+- **Supabase** : auth email/mot de passe + table `cap_data` (`user_id`, `data` JSONB, `rev`, `updated_at`), RLS. Client nommé `sb` (pas `supabase`), créé en tête de `src/App.jsx` avec `createClient` importé.
 - **Sync** : localStorage + sauvegarde cloud debouncée 1,5 s en compare-and-swap sur `rev` (`cloudSaveCAS`). Ne jamais réintroduire d'upsert inconditionnel.
 
 ## Conventions de code
@@ -25,9 +26,9 @@ Cap est une app de productivité pensée pour un cerveau TDAH (le mot n'apparaî
 - Commentaires et textes d'interface en français.
 
 ## Déploiement
-- Vercel (projet `cap`), prod : `https://cap-lac.vercel.app`. **Un push sur `main` = mise en production.** Tout push sur une autre branche = preview.
+- Vercel (projet `cap`), prod : `https://cap-lac.vercel.app`. **Un push sur `main` = mise en production.** Tout push sur une autre branche = preview. Vercel build avec Vite (`vercel.json` : `npm ci`, `npm run build`, sortie `dist/`) ; un build en échec laisse la prod précédente en ligne → toujours vérifier `npm run build` avant de pousser.
 - Process : travailler sur une branche, un commit par lot, pousser → l'utilisateur teste la preview → **fusion dans `main` uniquement sur son « go »**.
 - La preview partage la base Supabase de la prod : le signaler, recommander un compte de test.
 
 ## Test headless
-Les CDN peuvent être bloqués dans l'environnement cloud, mais npm fonctionne : installer `react@18.3.1`, `react-dom@18.3.1`, `@babel/standalone@7.26.4`, `playwright-core` dans un dossier de travail, servir ces fichiers via l'interception de requêtes Playwright, et remplacer `supabase-js` par un faux client (session factice + table `cap_data` en mémoire). Chromium : `/opt/pw-browsers`.
+`npm ci` puis une **build de test** avec un faux Supabase : config Vite hors du repo (dossier de travail) avec `root` = le repo et un alias `@supabase/supabase-js` → faux module (`createClient` renvoyant une session factice + table `cap_data` en mémoire), sortie dans le dossier de travail. Servir cette sortie via l'interception de requêtes Playwright (`playwright-core` installé dans le dossier de travail ; Google Fonts peut être renvoyé vide). Chromium : `/opt/pw-browsers`. Pour un changement censé ne rien modifier à l'écran : comparer les captures avant/après (pixelmatch).

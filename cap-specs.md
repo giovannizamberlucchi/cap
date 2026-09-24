@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (8 lots) — lots 1 et 2 en prod le 2026-09-23**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) codé, en preview**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -10,8 +10,8 @@ App de productivité TDAH. Web déployée → futur mobile natif éventuel.
 ## Stack technique actuelle
 
 **Frontend**
-- HTML autonome avec React via Babel CDN
-- Pas de build, un seul fichier `index.html`
+- React 18 + **Vite** (depuis V5 lot 3) : `src/App.jsx` (toute l'app, un seul module), `src/styles.css`, `src/main.jsx`, `index.html` réduit au `<head>` ; `npm run dev` / `npm run build` → `dist/`
+- *Avant V5 lot 3 : un seul `index.html`, React + Babel standalone via CDN, sans build*
 - Style : papier crème + accents chauds, mode sombre dispo
 - Typo : Fraunces (titres) + DM Sans (corps) + JetBrains Mono (mono)
 
@@ -571,7 +571,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-2 en prod, lots 3-8 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-2 en prod, lot 3 en preview, lots 4-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -580,12 +580,13 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 |---|---|
 | 1 | S7 irritants (dette V3) + tri par échéance |
 | 2 | S6 « Démarrer » |
-| 3 | PWA + notifications push |
-| 4 | Synchro : fusion par tâche en cas de conflit |
-| 5 | Sentry + suppression complète du compte Supabase |
-| 6 | Heures libres (semaine d'abord) + alerte de surcharge |
-| 7 | Remplissage auto de la journée |
-| 8 | Import calendrier externe (Google) |
+| 3 | Migration vers React + Vite (build) — ajouté le 2026-09-24 |
+| 4 | PWA + notifications push |
+| 5 | Synchro : fusion par tâche en cas de conflit |
+| 6 | Sentry + suppression complète du compte Supabase |
+| 7 | Heures libres (semaine d'abord) + alerte de surcharge |
+| 8 | Remplissage auto de la journée |
+| 9 | Import calendrier externe (Google) |
 
 ### Lot 1 — S7 irritants ✅ en prod (2026-09-23)
 - **Date/heure passée à la création** : avertissement non bloquant ; jamais sur les routines (rattrapage).
@@ -610,24 +611,31 @@ Spec d'origine : une seule action « Démarrer » ; plein écran par défaut, ba
 - **Cadrage validé** : bouton 🎯 « Mode focus » retiré (cartes + suggestion) ; « Quitter » remplacé par Réduire / Arrêter / Fini ; relance d'une tâche entamée sur le reste ; reste < 5 min fusionné ; bilan neutre + ressenti ; **ajout hors spec d'origine** : chrono sur heure de fin + session persistée localement.
 - **Bugs corrigés** : « Fini » en plein écran laissait tourner le chrono sans enregistrer le temps ; démarrer une autre tâche écrasait le chrono sans enregistrer son temps.
 - Détail : voir « Session « Démarrer » » dans la partie V3 (fonctionnel). Code : `buildSessionPlan`, `sessionPlanMinutes`, `runningLeft`, `stepRunning` (pur), `startTask` / `finishSession` / `extendSession` / `skipPhase` / `stopTask` dans l'app, `SessionSummaryModal`. `toggleComplete(item, { silent })`.
-- Pas de changement de schéma (session locale, hors `state`). Pas de push (lot 3) : cloche + notification locale si Cap ouvert.
+- Pas de changement de schéma (session locale, hors `state`). Pas de push (lot 4) : cloche + notification locale si Cap ouvert.
 - **Reporté** : Démarrer depuis l'agenda (overlay vue Jour).
 
-### Lot 3 — PWA + push
-- **Technique** : service worker écrit à la main (`sw.js`) + `manifest.webmanifest`, **pas de build** (Workbox et Vite écartés). Icônes PNG tirées du CapMark (192, 512, maskable).
-- `sw.js` : cache des dépendances CDN et des polices (ouverture hors-ligne), réseau d'abord pour `index.html`, réception du push, clic sur la notification → ouvre la tâche.
-- **Push** : table Supabase des rappels des 14 prochains jours (réécrite à chaque sauvegarde) + table des abonnements push ; Edge Function lancée chaque minute (pg_cron) qui envoie les rappels dus (Web Push, clés VAPID). Gratuit à cette échelle. Première brique serveur hors `index.html`.
-- **Limite** : sur iPhone, push seulement si Cap est installé sur l'écran d'accueil (iOS 16.4+).
-- Connu, hors V5 : ~1-2 s de compilation Babel à chaque ouverture sur téléphone. Un build viendra si ça gêne.
+### Lot 3 — Migration vers React + Vite ✅ codé (2026-09-24, en preview)
+Ajouté au cadrage le 2026-09-24 : passer au build **avant** la PWA (qui en dépend : `vite-plugin-pwa`) et supprimer la compilation Babel dans le navigateur (~1-2 s à chaque ouverture sur téléphone, fichier au-delà de la limite de 500 Ko de Babel). SvelteKit écarté (réécriture complète de ~10 000 lignes, rendu serveur inutile pour une app privée derrière un login).
+- **Migration mécanique** : le script Babel devient `src/App.jsx` **tel quel** (imports React / supabase-js en tête, `export default AuthGate`), le CSS devient `src/styles.css` tel quel, `src/main.jsx` fait le rendu, `index.html` ne garde que le `<head>` (titre, favicon, Google Fonts) et `<div id="root">`. Seule ligne de code changée : `window.supabase.createClient` → `createClient` importé.
+- **Dépendances npm figées** (`package-lock.json`) : react / react-dom 18.3.1, @supabase/supabase-js 2.108.2 (mêmes versions que les CDN) ; dev : vite 8, @vitejs/plugin-react 6. Node 22.
+- **Vercel** : `vercel.json` (framework vite, `npm ci`, `npm run build`, sortie `dist/`). Build en échec = la prod précédente reste en ligne.
+- Rien d'autre : pas de découpage en modules, pas de TypeScript, pas de lint (plus tard, progressivement). Données, clés localStorage, Supabase, schéma v14 : inchangés.
+- **Vérifié** : mêmes parcours et mêmes données sur l'ancienne et la nouvelle version, 25 captures comparées au pixel (tous les onglets, agenda jour/semaine/mois/année, modales, sombre, mobile, Démarrer) → identiques, hors animations en cours ; même état final des données ; aucune erreur JS. Bundle : 170 Ko gzip (+ 6 Ko CSS) au lieu de React + Babel standalone + source JSX.
 
-### Lot 4 — Synchro
+### Lot 4 — PWA + push
+- **Technique** (révisée après la migration Vite du lot 3, à confirmer au cadrage) : `vite-plugin-pwa` (Workbox) — manifest généré, précache des fichiers du build (noms hachés) et des polices, mise à jour de l'app installée ; service worker complété pour la réception du push et le clic sur la notification → ouvre la tâche. Icônes PNG tirées du CapMark (192, 512, maskable). *(Avant la migration : `sw.js` écrit à la main, sans build.)*
+- **Push** : table Supabase des rappels des 14 prochains jours (réécrite à chaque sauvegarde) + table des abonnements push ; Edge Function lancée chaque minute (pg_cron) qui envoie les rappels dus (Web Push, clés VAPID). Gratuit à cette échelle. Première brique serveur hors du front.
+- **Limite** : sur iPhone, push seulement si Cap est installé sur l'écran d'accueil (iOS 16.4+).
+- **À trancher au cadrage** — reco : envoyer aussi en push les fins de tranche / de pause des sessions « Démarrer » (même circuit : une ligne de rappel à l'heure de fin prévue, mise à jour à chaque pause/arrêt).
+
+### Lot 5 — Synchro
 En cas de conflit (compare-and-swap refusé) : **fusion à 3 voies par tâche** (dernière version commune gardée en local, version locale, version cloud) au lieu d'adopter tout le cloud et de mettre le local de côté. Conflit sur une même tâche : la modification la plus récente gagne, l'autre reste en stash.
 
-### Lot 5 — Sentry + suppression du compte
+### Lot 6 — Sentry + suppression du compte
 - Sentry : capture des erreurs JS (DSN à fournir par l'utilisateur au moment du lot).
 - Suppression complète : Edge Function admin qui supprime le compte auth Supabase en plus des données (RGPD).
 
-### Lot 6 — Heures libres + alerte de surcharge
+### Lot 7 — Heures libres + alerte de surcharge
 - **Heures libres = heures éveillées − survie − déjà engagé**, sur les jours restants de la période. **Semaine d'abord**, mois en second.
   - Heures éveillées : réglage, 16 h/j par défaut. Survie : réglage, 3 h/j par défaut (repas, hygiène, ménage).
   - Déjà engagé : RDV (+ prep/trajets), tâches datées (durée estimée), routines horodatées, réglage facultatif « travail » (ex. 7 h × jours ouvrés).
@@ -638,7 +646,7 @@ En cas de conflit (compare-and-swap refusé) : **fusion à 3 voies par tâche** 
   - Ne compte pas : routines, non datées, déjà cochées.
   - Seuil 15 par défaut, réglable. Toast non bloquant au moment où on le dépasse, une fois par jour : « 16 choses aujourd'hui. Tu surinvestis le quotidien ? » + « Voir ma journée ».
 
-### Lot 7 — Remplissage auto de la journée
+### Lot 8 — Remplissage auto de la journée
 - Bouton « Remplir ma journée » (vue Jour) → **aperçu en pointillés** : tout valider / retirer / annuler. Rien n'est placé sans accord.
 - Candidates, dans l'ordre : datées aujourd'hui sans heure → Must non datées → Should → Want. Routines horodatées et RDV : fixes.
 - Créneaux : trous libres, jamais avant maintenant, dans une plage réglable (défaut 9h–19h), marge 5 min, prep/trajets des RDV respectés.
@@ -646,7 +654,7 @@ En cas de conflit (compare-and-swap refusé) : **fusion à 3 voies par tâche** 
 - Ordre : énergie haute sur le prime time (sinon le matin), énergie faible en fin de journée, tâches courtes pour boucher les petits trous. *(Écart assumé avec « énergie croissante » de la spec d'origine.)*
 - Tâche > 30 min sans sous-tâches : placée quand même + suggestion « découpe-la ? » (jamais de découpage automatique). Sous-tâches d'un même parent : groupées, les plus courtes d'abord.
 
-### Lot 8 — Import calendrier externe
+### Lot 9 — Import calendrier externe
 - Phase 1 : **lecture seule**, événements en grisé dans l'agenda, sans interaction avec le chevauchement de Cap (spec d'origine). Sync bidirectionnelle : plus tard.
 - **Technique à trancher au début du lot** — reco : **URL iCal secrète** (Google, Outlook et Apple en fournissent une) lue par une Edge Function (contourne le CORS), au lieu de l'OAuth Google (projet Google Cloud, écran de consentement, jetons à renouveler). Plus simple, universel, suffisant en lecture seule.
 
