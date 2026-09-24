@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) en prod le 2026-09-24**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) en prod le 2026-09-24 · lot 5 (synchro par fusion) codé, en preview**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -34,6 +34,7 @@ App de productivité TDAH. Web déployée → futur mobile natif éventuel.
 - Sauvegarde cloud avec debounce 1.5s après chaque modif
 - Indicateur visuel : `Sync…` / `Synchro · il y a Xmin` / `⚠ Pas synchro depuis Xmin` (couleurs vert/orange/rouge)
 - Stratégie : **versionning par révision (`rev`) + compare-and-swap** (cf. « Correctif sync #2 » plus bas). Un appareil ne peut plus écraser une version cloud plus récente. *(remplace le last-write-wins par timestamp)*
+- **V5 lot 5** : en cas de version cloud plus récente, **fusion à 3 voies** (base commune gardée en local, `src/sync-merge.js`) au lieu de l'adoption en bloc ; vérification au retour sur l'app.
 
 ---
 
@@ -571,7 +572,197 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-4 en prod, lots 5-9 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-4 en prod, lot 5 en preview, lots 6-9 à coder)
+
+**Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
+
+### Lots (ordre)
+| Lot | Contenu |
+|---|---|
+| 1 | S7 irritants (dette V3) + tri par échéance |
+| 2 | S6 « Démarrer » |
+| 3 | Migration vers React + Vite (build) — ajouté le 2026-09-24 |
+| 4 | PWA + notifications push |
+| 5 | Synchro : fusion par tâche en cas de conflit |
+| 6 | Sentry + suppression complète du compte Supabase |
+| 7 | Heures libres (semaine d'abord) + alerte de surcharge |
+| 8 | Remplissage auto de la journée |
+| 9 | Import calendrier externe (Google) |
+
+### Lot 1 — S7 irritants ✅ en prod (2026-09-23)
+- **Date/heure passée à la création** : avertissement non bloquant ; jamais sur les routines (rattrapage).
+- **Trajet retour asymétrique** : champ retour séparé, prérempli avec l'aller.
+- **Badge « en retard de prep »** : reste visible en ocre jusqu'à l'heure du RDV.
+- **Archive** : suppression définitive à l'unité + « Vider l'archive » avec confirmation.
+- **Pluriels** des labels streak ; **suppression des champs morts** `streakCount`, `graceDays`, `lastEvaluatedPeriod` (schema v14) ; **revue complète du mode sombre**.
+- **Tri par échéance** dans Priorités : bouton qui bascule sur une liste unique triée par deadline (les filtres Échéance ne font que filtrer les colonnes).
+- Onglet « Deadlines » : abandonné. Prep/trajet modifiés sur une occurrence qui touchent le template : laissé tel quel (rien remonté à l'usage).
+- **Implémentation** :
+  - Avertissement à la création (`warnOnCreate`, QuickAdd + modale complète) : fusionne l'info chevauchement et « ⏳ … est déjà passé — tâche créée quand même ». Jamais sur une tâche récurrente ni une routine. Pas à l'édition.
+  - Trajet retour : `travelReturnDuration` (null = identique à l'aller) ; case « 🔄 Trajet retour » toujours disponible, sélecteur prérempli avec l'aller, « Aucun » décoche. La couronne du RDV (agenda, chevauchements) utilise la durée retour.
+  - Badge en-tête : prep/départ dépassé mais RDV pas commencé → badge ocre « RDV HH:MM · … · préparation prévue à HH:MM, RDV dans X ».
+  - Archive : poubelle par tâche (annulable) + « Vider l'archive » (confirmation, annulable par Ctrl+Z / Annuler).
+  - Pluriels : « 1 jour / semaine / année de suite ».
+  - Schema **v14** : `streakCount`, `graceDays`, `lastEvaluatedPeriod` retirés à la migration et plus jamais écrits.
+  - Tri par échéance : case « Trier par échéance » (persistée `settings.sortByDeadline`) à côté de « Afficher les récurrentes » ; liste unique groupée En retard / Aujourd'hui / Cette semaine / Ce mois-ci / Plus tard / Sans échéance, étiquette de priorité par ligne. Échéance effective = la plus proche entre la tâche et ses sous-tâches ouvertes. Recherche et filtres s'appliquent. RDV importants exclus (ils vivent dans le bandeau).
+  - Mode sombre : bouton « + Nouvelle » catégorie (fond blanc) corrigé, `.btn-ghost` transparent par défaut ; raccourcis 1/2/3 sur une ligne dans Réglages ; en-tête qui ne se tasse plus quand le badge RDV est long.
+
+### Lot 2 — S6 « Démarrer » ✅ en prod (2026-09-23)
+Spec d'origine : une seule action « Démarrer » ; plein écran par défaut, bascule mini-fenêtre ; tâche ≤ D (focus pomodoro) → démarre sur sa durée estimée, bilan estimé/réel ; tâche > D → tranches D → pause → … → reste.
+- **Cadrage validé** : bouton 🎯 « Mode focus » retiré (cartes + suggestion) ; « Quitter » remplacé par Réduire / Arrêter / Fini ; relance d'une tâche entamée sur le reste ; reste < 5 min fusionné ; bilan neutre + ressenti ; **ajout hors spec d'origine** : chrono sur heure de fin + session persistée localement.
+- **Bugs corrigés** : « Fini » en plein écran laissait tourner le chrono sans enregistrer le temps ; démarrer une autre tâche écrasait le chrono sans enregistrer son temps.
+- Détail : voir « Session « Démarrer » » dans la partie V3 (fonctionnel). Code : `buildSessionPlan`, `sessionPlanMinutes`, `runningLeft`, `stepRunning` (pur), `startTask` / `finishSession` / `extendSession` / `skipPhase` / `stopTask` dans l'app, `SessionSummaryModal`. `toggleComplete(item, { silent })`.
+- Pas de changement de schéma (session locale, hors `state`). Pas de push (lot 4) : cloche + notification locale si Cap ouvert.
+- **Reporté** : Démarrer depuis l'agenda (overlay vue Jour).
+
+### Lot 3 — Migration vers React + Vite ✅ en prod (2026-09-24)
+Ajouté au cadrage le 2026-09-24 : passer au build **avant** la PWA (qui en dépend : `vite-plugin-pwa`) et supprimer la compilation Babel dans le navigateur (~1-2 s à chaque ouverture sur téléphone, fichier au-delà de la limite de 500 Ko de Babel). SvelteKit écarté (réécriture complète de ~10 000 lignes, rendu serveur inutile pour une app privée derrière un login).
+- **Migration mécanique** : le script Babel devient `src/App.jsx` **tel quel** (imports React / supabase-js en tête, `export default AuthGate`), le CSS devient `src/styles.css` tel quel, `src/main.jsx` fait le rendu, `index.html` ne garde que le `<head>` (titre, favicon, Google Fonts) et `<div id="root">`. Seule ligne de code changée : `window.supabase.createClient` → `createClient` importé.
+- **Dépendances npm figées** (`package-lock.json`) : react / react-dom 18.3.1, @supabase/supabase-js 2.108.2 (mêmes versions que les CDN) ; dev : vite 8, @vitejs/plugin-react 6. Node 22.
+- **Vercel** : `vercel.json` (framework vite, `npm ci`, `npm run build`, sortie `dist/`). Build en échec = la prod précédente reste en ligne.
+- Rien d'autre : pas de découpage en modules, pas de TypeScript, pas de lint (plus tard, progressivement). Données, clés localStorage, Supabase, schéma v14 : inchangés.
+- **Vérifié** : mêmes parcours et mêmes données sur l'ancienne et la nouvelle version, 25 captures comparées au pixel (tous les onglets, agenda jour/semaine/mois/année, modales, sombre, mobile, Démarrer) → identiques, hors animations en cours ; même état final des données ; aucune erreur JS. Bundle : 170 Ko gzip (+ 6 Ko CSS) au lieu de React + Babel standalone + source JSX.
+
+### Lot 4 — PWA + push ✅ en prod (2026-09-24)
+**Cadrage validé** (2026-09-24) : PWA installable et hors ligne, push via Supabase, **+ rappels sur les récurrentes / routines** (manque constaté : le rappel était masqué dès qu'il y avait une récurrence) **+ push des fins de phase « Démarrer »**. Plus de demande d'autorisation au premier clic.
+
+**PWA**
+- `vite-plugin-pwa` en `injectManifest` : service worker maison `src/sw.js` (Workbox) — précache du build, navigation → `index.html` précaché, Google Fonts en cache (CSS revalidée, polices 1 an), réception du push, clic sur la notification.
+- Manifest généré (Cap, papier `#F4EFE6`, standalone, fr) ; icônes `public/icons/` (192, 512, maskable 512, apple-touch 180, badge 96 monochrome) générées depuis le mark du favicon ; balises iOS dans `index.html`.
+- **Mise à jour** : `registerType: 'prompt'` → `main.jsx` enregistre le SW (`registerSW`) et émet `cap:need-refresh` → toast « ✨ Nouvelle version de Cap · Recharger » (jamais de rechargement forcé). Remplace le « recharge tous tes onglets » après une mise en prod (à partir de la version suivante).
+
+**Rappels (calcul unique)**
+- `computeReminders(items, now, 14)` : tâches datées avec heure + rappel (heure de partir si RDV avec trajet), **et occurrences des récurrentes / routines** (un rappel par créneau pour les routines multi-créneaux ; occurrences cochées, sautées, créneaux faits exclus ; récurrences flottantes exclues faute d'heure). Clé stable `r:<item>:<date>T<heure>:<délai>`.
+- `sessionReminders(running, titre, réglages)` : simule l'enchaînement prévu d'une session (sans pause, 12 phases max) → fins de tranche / de pause / temps prévu écoulé. Effacés à la pause, à l'arrêt, sur Fini ; recréés à la reprise.
+- Modale : « Rappel · à chaque occurrence » proposé aussi pour une récurrente / routine à heure fixe.
+- **Minuteurs locaux** (Cap ouvert) : même calcul ; **désactivés sur un appareil abonné au push** (et `notify()` muet) → pas de doublon ; la cloche et les toasts de session restent.
+
+**Push (Supabase, première brique serveur)**
+- Tables `push_subscriptions` (un abonnement par appareil et par compte, `unique(user_id, endpoint)`) et `reminders` (`primary key (user_id, key)`, `sent_at`), RLS « les siens ».
+- L'app réécrit les rappels à venir (2 s après un changement de tâches ou de session, + toutes les heures / au retour sur l'onglet) : upsert par clé + suppression des rappels futurs disparus ; un rappel déjà envoyé n'est jamais renvoyé ; `test:*` jamais supprimés par l'app.
+- Edge Function **`send-reminders`** (Deno, `verify_jwt` off, protégée par l'en-tête `x-cap-cron`) appelée **chaque minute par pg_cron** (`cap-send-reminders`, pg_net) : réclame les rappels dus en une requête UPDATE (pas de double envoi), abandonne ceux en retard de plus de 10 min, chiffre avec `web-push` (`generateRequestDetails`) et envoie en `fetch` natif (TTL 10 min, urgence haute), supprime les abonnements morts (404/410), purge les rappels de plus de 2 jours.
+- **Secrets générés dans Supabase, jamais ailleurs** : `cap_cron_secret` (aléatoire, en base), paire VAPID P-256 générée par la fonction au premier appel (WebCrypto) et rangée dans le Vault (`cap_push_store_vapid`, une seule fois). L'app lit la clé **publique** via `cap_vapid_public_key()` (autorisé aux connectés, voulu). Config lue par `cap_push_config()` (clé de service uniquement).
+- SQL versionné dans `supabase/migrations/`, fonction dans `supabase/functions/send-reminders/`. `pg_net` dans le schéma `extensions`.
+- **Clic sur une notification** : ramène Cap au premier plan (message `cap:open-item`) ou l'ouvre sur `/?item=<id>` → modale de la tâche (ou plein écran si c'est la session en cours).
+- **Réglages › Notifications** (par appareil) : Activer / Désactiver / « Envoyer une notification de test » (arrive dans la minute) ; états refusé / non géré / « sur iPhone, installe d'abord Cap ». Déconnexion = l'appareil ne reçoit plus les notifications du compte ; suppression du compte = abonnements et rappels effacés.
+- **Vérifié** : chiffrement Web Push sous Deno (déchiffrement contrôlé), chaîne serveur de bout en bout (rappel dû → envoi → abonnement mort supprimé), calcul des rappels (routine 2 créneaux, heure de partir, hebdo, flottante exclue, coche → retiré), rappels de session (5 phases, pause / reprise / arrêt), SW actif, hors ligne, lien `?item=`, toast de mise à jour ; non-régression visuelle (seuls les Réglages changent). **La réception réelle d'une notification ne se teste que sur un vrai appareil.**
+- **Limites** : iPhone → Cap installé sur l'écran d'accueil (iOS 16.4+) ; précision ~1 min (pg_cron) ; les fins de phase d'une session sont envoyées à **tous** les appareils abonnés du compte.
+
+### Lot 5 — Synchro ✅ codé (2026-09-24, en preview)
+Spec d'origine : en cas de conflit, fusion à 3 voies par tâche au lieu d'adopter tout le cloud ; même tâche modifiée des deux côtés → la plus récente gagne, l'autre en stash.
+- **Constat au cadrage** : 2 chemins de perte — (1) sauvegarde refusée (CAS) → local mis de côté en bloc (`-conflict`, invisible) et cloud adopté ; (2) au démarrage, cloud plus récent adopté **même si l'appareil avait des modifications non envoyées** (perdues sans stash). Angle mort : un onglet ouvert ne voyait jamais les changements faits ailleurs.
+- **Module `src/sync-merge.js`** (pur, premier module sorti de `App.jsx`, validé) : `mergeStates(base, local, cloud, { localNewer })` → `{ merged, conflicts }`.
+  - Champ par champ : le côté qui a changé par rapport à la base gagne ; les deux → **vrai conflit** : la plus récente gagne (`localNewer` = dernière modif locale vs `updated_at` du cloud), l'autre valeur est renvoyée dans `conflicts`.
+  - **Arbres** (`items`/`subtasks`, `caps`/`children`) : aplatis par id (champs + parent + position) → pas de doublon en cas de déplacement ; parent supprimé mais enfant gardé → parent ressuscité.
+  - Listes d'objets à id (visions, argent, arrêts, catégories…) : élément par élément. Listes de valeurs / objets sans id (`history`, créneaux, `focusLog`…) : ensembles, ajouts et retraits combinés. Objets (réglages, rituels, `exceptions`, `slotHistory`…) : clé par clé. Clés inconnues : fusionnées pareil.
+  - **Supprimé d'un côté, modifié (contenu ou position) de l'autre → gardé**, version modifiée entière.
+  - Compteurs `actualMinutes` / `pomosDone` : incréments additionnés. Horodatages techniques (`completedAt`, `statusChangedAt`, `reachedAt`…) : tranchés sans être signalés.
+  - Ordre : ordre local, les nouveautés du cloud insérées avant leur successeur (sinon à la fin).
+- **Tests** : `npm test` (`node --test`, aucune dépendance) — 22 tests dont 3000 fusions aléatoires (pas de doublon, aucun ajout perdu, rien d'intact supprimé, aucune modification perdue même si l'autre côté a supprimé).
+- **Intégration (`App.jsx`)** : `integrateRemote(remote)` —
+  - version commune (`-base` en localStorage, = dernier état écrit ou adopté) ; heure de dernière modif locale (`-lastedit`) ;
+  - rien changé localement depuis la base → adoption ; sinon fusion → si la fusion diffère du cloud, elle repart en CAS sur la nouvelle révision ;
+  - pas encore de base (1re synchro après la mise à jour, cloud en avance) → ancien comportement (local mis de côté dans `-conflict`, sauf appareil neuf jamais modifié) ; base créée dès que l'appareil est à jour ;
+  - appelée : CAS refusé, démarrage (cloud en avance), **retour sur l'app** (`visibilitychange`, 15 s mini entre deux vérifications, jamais pendant une sauvegarde).
+  - Saisie pendant la fusion : refusionnée par-dessus (rien d'écrasé).
+- **Conflits** : toast « Synchro : N conflit(s) — version la plus récente gardée · Voir » ; **Réglages › Synchro** (visible seulement s'il y a des conflits) : tâche, champ, gardé / mis de côté, « Reprendre l'autre version » (tâches), OK, Tout effacer. 50 derniers, en localStorage.
+- **Vérifié** (2 appareils simulés sur une base partagée) : onglet pas à jour → coche + renommage conservés ; retour sur l'app → changements récupérés ; vrai conflit → plus récente gagne + liste + reprise ; modifs hors ligne + rechargement → fusionnées, rien de perdu. Non-régression visuelle OK.
+- Pas de changement de schéma ni de serveur. **Limite** : départage des vrais conflits à l'horloge des appareils (décalage possible ; l'autre valeur reste récupérable). Pas de temps réel (Supabase Realtime) : vérification au retour sur l'app.
+
+### Lot 6 — 4d : vases communicants (+ vue semaine « usage C » de 4g)
+- Période semaine / mois. Tuiles : temps réalisé (réel pomodoro si mesuré, sinon estimé), **sur tes caps vs quotidien**, ressenti ☀️/😴, solde net.
+- Barres : « Le quotidien et le long terme » (caps vs quotidien) ; temps par pilier (+ « Sans pilier ») et Sens = Lien + Alignement ; énergie (modes du check-in, ce que tu arrêtes) ; **tendance 8 semaines** caps/quotidien avec légende, info-bulles et « Voir en tableau ».
+- Calcul (`computeTimeSpent`) : feuilles seulement (pas de double compte parent/sous-tâches) ; routines = durée × occurrences cochées ; une tâche à deux piliers compte dans les deux. Aucun score, aucun pourcentage.
+- Couleurs : `--violet` (caps, plus clair en sombre) et gris encre (quotidien) ; l'identité passe toujours par le libellé de ligne ou la légende.
+
+### Lot 7 — 4f : prime time (schema v13)
+- `state.focusLog` : `{ at, min, itemId }` à chaque pomodoro de focus terminé (1000 dernières entrées).
+- `computePrimeTime` : ≥ 10 sessions sur 60 j étalées sur ≥ 14 j → heure de pointe de démarrage élargie à 2 h vers le voisin le plus fourni. Affiché dans Piliers › Énergie comme observation (« Une observation, pas une consigne »). Aucune notification.
+
+### Lot 8 — 4g : les caps dans l'agenda, vue Année
+- **Vue Mois** : repères violets sous le numéro du jour pour les échéances des caps actifs (◆ objectif · ▸ projet · ⚑ jalon), clic → Boussole. Masqués en période de pause.
+- **Vue Année** (bouton « Année ») : 12 mini-mois, densité des tâches ponctuelles datées, jours d'échéance de cap soulignés, aujourd'hui cerclé ; clic mois → vue Mois, clic jour → vue Jour ; liste « Échéances de tes caps en AAAA ».
+- Heatmap horaire vue Mois : **abandonnée** (doublon avec le lot C2). Pastilles catégories : déjà là (C2).
+
+### Limites connues / reporté
+- Pace sans `reachedAt` pour les jalons franchis avant v11 → jamais « en avance » sur ces anciens jalons.
+- « Réduire le livrable » consigne la réponse avant l'édition : annuler l'édition ne ramène pas la question.
+- Ressenti ☀️/😴 uniquement sur les tâches ponctuelles (pas sur les occurrences de routine).
+- Période de pause : réglage dans la Boussole uniquement (pas dans Réglages).
+- Focus hebdo et cap du mois : pas de mise en avant dans les colonnes Priorités (seulement en-tête, Boussole, suggestion).
+
+## Identité visuelle — logo + écran de chargement — livré 2026-09-20
+
+- **`<CapMark />`** : mark « barre à roue » (piste 2A) en SVG inline, monochrome (`currentColor`) + un rayon d'accent sur `--ocean` → suit le thème. Utilisé en en-tête (remplace le titre « Cap », mot conservé en texte masqué dans le `<h1>` pour les lecteurs d'écran), écran de connexion et récupération de mot de passe.
+- **Favicon** : même mark sur tuile papier, traits épaissis (lisible 16→64px, onglet clair et sombre). Remplace l'emoji boussole.
+- **`<CapLoader />`** : écran de chargement animé — rayons allumés en séquence sur deux tours, roue figée au nord, étoile polaire, boucle. Halo sur `--ocean`. `prefers-reduced-motion` → état d'arrivée direct.
+- Retrait des emojis boussole redondants dans les intitulés + icône compas de la ligne de date.
+- **Mentions TDAH retirées de l'interface** : `<title>` = « Cap — ton rythme, ton énergie » ; écran de connexion « Productivité » (au lieu de « Productivité TDAH »). Le positionnement TDAH reste dans les specs et les commentaires de code, pas dans l'UI.
+
+---
+
+## V4 4a.2 / 4a.3 — design (principes) — ✅ codé, voir « V4 Phase 4 codée » plus haut
+
+*(Conception validée, issue de `cap-4a-architecture-temporelle.md`, désormais intégrée ici. S'appuie sur le socle 4a.1.)*
+
+### 4a.2 — Couche confrontation + signal de pace
+
+**Principe** : la confrontation **ne combat pas l'inaction, mais la dérive inconsciente**. Ne rien faire sur un projet peut être le bon choix ; le problème c'est de dériver *sans le voir*. Le rêve ne crie jamais — l'app donne une voix au silencieux pour que l'inaction redevienne un *choix*, pas un oubli. L'ennemi : « le silence passe inaperçu », pas « tu n'en fais pas assez ».
+
+**La voix = une question, jamais un verdict.** Constat brut + souveraineté immédiate (« … tu valides ? »). Trois réponses **toutes légitimes** :
+1. **Pause assumée** → le cap s'endort, zéro culpabilité, enregistré comme conscient.
+2. **Ça m'a échappé** → là seulement, l'app propose un coup de pouce (caser une petite tâche la semaine suivante). Aide à se rebrancher, ne sermonne pas.
+3. **Ça ne compte plus** → cap retiré, et **célébré** (lâcher un objectif mort = victoire). (Déjà implémenté en 4a.1 sur l'abandon.)
+
+**Signal de pace — porté par les jalons, zéro tracking d'heures.** Les jalons ont deadline + état franchi → ils sont le métronome. Le calendrier dit où tu *devrais* être, l'état des jalons où tu *es*, l'écart donne 4 niveaux :
+
+| Niveau | Condition |
+|---|---|
+| **rien** | aucun jalon bougé, une échéance déjà passée |
+| **un peu en retard** | un jalon échu pas encore franchi |
+| **ok** | jalons franchis collent au calendrier |
+| **en avance** | jalons franchis avant les dates |
+
+- Le tranchant vient du **contraste déclaration/réalité**, pas de la précision horaire (mesurer les heures = surveillance + exclusion de l'immesurable → écarté).
+- Sans jalon daté : jauge grossière sur la deadline finale du projet. Raison de plus de poser des jalons.
+- **S'applique à projet/jalon uniquement** (date + livrable concret). **Objectif/Vision : jamais de chrono**, confrontation douce (alignement/sens) seulement.
+
+**« Retard » sur un cap : jamais.** Une tâche peut être en retard (chip rouge V3 légitime). Un cap non : deadline de projet passée → l'app **demande** (« repousser / réduire le livrable / classer ? »). Question + options + souveraineté, jamais de rouge pulsant ambiant. *(4a.1 affiche déjà « · échue » en neutre ; la question interactive est à coder ici.)*
+
+**Cap zombie** (seule exception où l'app parle d'elle-même) : rien depuis ~3 semaines → l'app rompt le silence **une fois, doucement, au bilan** (« pause assumée ou perte de sens ? »). Jamais en alarme quotidienne.
+
+**Kill-switch — mode bas régime** : « période de pause » coupe **toute** confrontation, détection zombie et nudge ; caps en sommeil silencieux. La confrontation s'*invite*, ne *poursuit* jamais.
+
+### 4a.3 — Rituel hebdo unique + focale mensuelle
+
+**Un seul rituel hebdo** (fusion mini-bilan + confrontation — deux rituels, un cerveau TDAH en lâche un, et ce serait le qui-pique).
+
+**Ordre non négociable : doux → qui-pique → souveraineté.**
+1. **« Qu'est-ce qui a compté cette semaine ? »** — rétrospectif, ouvert, sans jugement. Ancrage sur le réel/le positif.
+2. **« Où en sont tes projets ? »** — la jauge de pace remonte ici, en questions, sur terrain déjà apaisé.
+3. **« La semaine qui vient, qu'est-ce qui compte ? »** — clôture = rendre la main. Le « one thing » se pose comme conséquence du regard porté, pas comme case à remplir.
+
+> Inverser (pace en premier) ouvrirait sur « voilà ce que tu n'as pas fait » → onglet claqué. L'ordre, c'est ce qui fait qu'on revient.
+
+**Forme** : intégralement **sautable**, **pas de streak**, **court** (trois respirations). Coupé par le mode bas régime.
+
+**Mensuel** = autre focale : la **direction** (objectifs + alignement vision). Plus rare, contemplatif. L'hebdo regarde l'exécution, le mensuel regarde le cap.
+
+### Garde-fous 4a (verrouillés, valent pour tout V4 4a)
+- Aucun **streak / % / score** sur les caps. Aucune notion de **« retard »** sur un cap.
+- `why` court (obligatoire objectif, optionnel nœud — acté 4a.1). Rattachement toujours optionnel.
+- **Plafonds en soft** (warning, pas verrou). Bilans jamais obligatoires, sautables, sans streak. Mode bas régime coupe tout.
+- Différence Cap-libérateur vs Cap-prison : ce que l'app dit quand on n'a rien fait (question, pas jugement), friction d'entrée faible, pas de « retard » sur les caps, célébration (pas punition) quand on lâche un cap.
+
+### Décisions (tranchées au cadrage du 2026-09-23)
+- **Filiation tâche → cap** : ✅ tranchée et codée en 4a.1 (`capId` unique, lignée déduite).
+- **Plafonds** : soft ; **focus hebdo principal unique** (focus désigné, pas de compteur, pas de secondaires).
+- **Écrans** du rituel, mensuel (4e écran du 1er rituel du mois) et rendu du pace (mention neutre, rien sans jalon daté) : ✅ codés.
+- **Mesure d'objectif** : optionnel acté et codé (4a.1).
+
+---
+
+## V5 — cadrage validé le 2026-09-23 (lots 1-4 en prod, lot 5 en preview, lots 6-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 

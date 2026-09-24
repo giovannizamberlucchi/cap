@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { mergeStates, deepEqual } from './sync-merge.js';
 
 // V4 4a.1 : contexte léger pour exposer l'arbre des caps aux cartes de tâche (chip lignée)
 // value = { caps, onOpenCap }
@@ -1924,6 +1925,27 @@ function CapApp({ session }) {
   }
   const setBaseRev = (r) => { baseRevRef.current = r; try { localStorage.setItem(CLOUD_REV_KEY, String(r)); } catch {} };
   const skipCloudSaveRef = useRef(false);     // sauter la sauvegarde juste après une adoption cloud
+  // V5 lot 5 : dernière version commune (base de la fusion à 3 voies), gardée en local sur cet appareil
+  const BASE_KEY = `${STORAGE_KEY_USER}-base`;
+  const LASTEDIT_KEY = `${STORAGE_KEY_USER}-lastedit`;
+  const CONFLICTS_KEY = `${STORAGE_KEY_USER}-conflicts`;
+  const baseStateRef = useRef(undefined);
+  if (baseStateRef.current === undefined) {
+    try { baseStateRef.current = JSON.parse(localStorage.getItem(BASE_KEY) || 'null'); } catch { baseStateRef.current = null; }
+  }
+  const setBaseState = (st) => {
+    baseStateRef.current = st;
+    try { localStorage.setItem(BASE_KEY, JSON.stringify(st)); } catch { try { localStorage.removeItem(BASE_KEY); } catch {} }
+  };
+  // Heure de la dernière modification faite SUR CET APPAREIL (départage des vrais conflits)
+  const lastLocalEditRef = useRef(null);
+  if (lastLocalEditRef.current === null) {
+    try { lastLocalEditRef.current = parseInt(localStorage.getItem(LASTEDIT_KEY) || '0', 10) || 0; } catch { lastLocalEditRef.current = 0; }
+  }
+  const remoteApplyRef = useRef(true); // le prochain changement d'état vient du cloud (ou du chargement) → pas une modif locale
+  const [syncConflicts, setSyncConflicts] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(CONFLICTS_KEY) || '[]'); } catch { return []; }
+  });
   const cloudSaveInFlightRef = useRef(false); // évite deux écritures cloud concurrentes du même device
   // Refs tenues à jour à chaque rendu (lues par les handlers pagehide/visibilitychange)
   stateRef.current = state;
@@ -2006,6 +2028,95 @@ function CapApp({ session }) {
   // Adoption d'un état cloud → état local (helper commun load + résolution de conflit)
   const adoptCloud = (cloudData) => normalizeLoadedState(cloudData);
 
+  // V5 lot 5 : intègre une version cloud plus récente que la nôtre.
+  // - pas de modification locale depuis la version commune → on adopte le cloud tel quel ;
+  // - sinon → fusion à 3 voies ; si la fusion diffère du cloud, elle est renvoyée (CAS sur la nouvelle révision) ;
+  // - pas de version commune connue (1re synchro après la mise à jour) → ancien comportement : le local
+  //   est mis de côté (clé -conflict) et le cloud adopté.
+  function integrateRemote(remote) {
+    const cloud = adoptCloud(remote.data);
+    const rev = remote.rev || 0;
+    const local = stateRef.current;
+    const base = baseStateRef.current ? normalizeLoadedState(baseStateRef.current) : null;
+    setBaseRev(rev);
+    setBaseState(remote.data);
+    if (deepEqual(local, cloud)) return;
+    if (!base) {
+      // (appareil neuf, jamais modifié : rien à mettre de côté)
+      if (lastLocalEditRef.current) { try { localStorage.setItem(`${STORAGE_KEY_USER}-conflict`, JSON.stringify(local)); } catch {} }
+      skipCloudSaveRef.current = true;
+      remoteApplyRef.current = true;
+      setState(cloud);
+      return;
+    }
+    if (deepEqual(local, base)) {
+      skipCloudSaveRef.current = true;
+      remoteApplyRef.current = true;
+      setState(cloud);
+      return;
+    }
+    const remoteAt = remote.updatedAt ? Date.parse(remote.updatedAt) : 0;
+    const { merged, conflicts } = mergeStates(base, local, cloud, { localNewer: (lastLocalEditRef.current || 0) > remoteAt });
+    if (deepEqual(merged, cloud)) skipCloudSaveRef.current = true;
+    remoteApplyRef.current = true;
+    // Si l'état a bougé pendant ce temps (saisie en cours), on refusionne par-dessus
+    setState(prev => prev === local ? merged : mergeStates(local, prev, merged, { localNewer: true }).merged);
+    recordSyncConflicts(conflicts);
+  }
+
+  function recordSyncConflicts(list) {
+    if (!list || !list.length) return;
+    const at = Date.now();
+    const entries = list.map(c => ({ ...c, id: generateId(), at }));
+    setSyncConflicts(prev => {
+      const next = [...entries, ...prev].slice(0, 50);
+      try { localStorage.setItem(CONFLICTS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    const n = list.length;
+    showToast(`Synchro : ${n} conflit${n > 1 ? 's' : ''} — version la plus récente gardée`, { label: 'Voir', onClick: () => setShowSettings(true) }, 8000);
+  }
+
+  // Reprend la valeur mise de côté d'un conflit (tâches seulement : chemin items.<id>.<champ>…)
+  function restoreSyncConflict(c) {
+    const parts = (c.path || '').split('.');
+    if (parts[0] === 'items' && c.itemId && findItem(stateRef.current.items, c.itemId)) {
+      const rest = parts.slice(2);
+      const setIn = (obj, keys, val) => {
+        if (!keys.length) return val;
+        const [k, ...more] = keys;
+        const src = obj && typeof obj === 'object' ? obj : {};
+        return { ...src, [k]: setIn(src[k], more, val) };
+      };
+      if (rest.length) updateItem(c.itemId, it => ({ [rest[0]]: setIn(it[rest[0]], rest.slice(1), c.other) }));
+      showToast('Autre version reprise');
+    }
+    dismissSyncConflict(c.id);
+  }
+  function dismissSyncConflict(id) {
+    setSyncConflicts(prev => {
+      const next = id ? prev.filter(x => x.id !== id) : [];
+      try { localStorage.setItem(CONFLICTS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }
+
+  // V5 lot 5 : au retour sur l'app, on récupère les changements faits ailleurs (fusion si besoin)
+  const lastPullRef = useRef(0);
+  async function pullCloud() {
+    if (!hasLoadedCloudRef.current || cloudSaveInFlightRef.current || saveTimerRef.current) return;
+    if (Date.now() - lastPullRef.current < 15000) return;
+    lastPullRef.current = Date.now();
+    const res = await cloudLoad(userId);
+    if (!res || !res.data || res.data.items === undefined) return;
+    if (cloudSaveInFlightRef.current || saveTimerRef.current) return; // une sauvegarde a démarré entre-temps : elle gérera
+    if ((res.rev || 0) > baseRevRef.current) {
+      integrateRemote(res);
+      setLastSyncedAt(Date.now());
+      setCloudStatus('synced');
+    }
+  }
+
   // Sauvegarde cloud robuste (CAS), partagée par le debounce et le flush.
   const doCloudSave = async () => {
     if (!hasLoadedCloudRef.current) return;
@@ -2016,15 +2127,13 @@ function CapApp({ session }) {
       const res = await cloudSaveCAS(userId, snapshot, baseRevRef.current);
       if (res.ok) {
         setBaseRev(res.newRev);
+        setBaseState(snapshot); // V5 lot 5 : ce qui vient d'être écrit devient la version commune
         setLastSyncedAt(Date.now());
         setCloudStatus('synced');
       } else if (res.conflict && res.current && res.current.data && res.current.data.items !== undefined && (res.current.rev || 0) > baseRevRef.current) {
         // Un autre appareil détient une révision plus récente : on NE l'écrase PAS.
-        // On stashe d'abord le local non synchronisé (jamais de perte silencieuse), puis on adopte le cloud.
-        try { localStorage.setItem(`${STORAGE_KEY_USER}-conflict`, JSON.stringify(snapshot)); } catch {}
-        skipCloudSaveRef.current = true;
-        setBaseRev(res.current.rev || 0);
-        setState(adoptCloud(res.current.data));
+        // V5 lot 5 : on fusionne (base commune, local, cloud) puis la fusion repart en compare-and-swap.
+        integrateRemote(res.current);
         setCloudStatus('synced');
       } else {
         setCloudStatus('error');
@@ -2047,10 +2156,12 @@ function CapApp({ session }) {
       const cloudRev = res.rev || 0;
       const cloudHasData = cloudData && cloudData.items !== undefined;
       if (cloudHasData && cloudRev > baseRevRef.current) {
-        // Le cloud est plus avancé (un autre appareil a écrit après notre dernière sync) → on adopte.
-        skipCloudSaveRef.current = true; // pas de réécriture inutile juste après l'adoption
-        setState(adoptCloud(cloudData));
-        setBaseRev(cloudRev);
+        // Le cloud est plus avancé (un autre appareil a écrit après notre dernière sync).
+        // V5 lot 5 : adoption si rien n'a changé ici, sinon fusion (plus de modifications locales perdues).
+        integrateRemote(res);
+      } else if (cloudHasData && cloudRev === baseRevRef.current && !baseStateRef.current) {
+        // 1re ouverture après la mise à jour, appareil à jour : la version cloud devient la version commune
+        setBaseState(cloudData);
       }
       // Sinon local >= cloud → on garde le local ; le persist le repoussera via CAS (fait avancer la révision).
       setHasLoadedCloud(true);
@@ -2071,7 +2182,10 @@ function CapApp({ session }) {
       if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
       try { doCloudSave(); } catch {}
     };
-    const onVis = () => { if (document.visibilityState === 'hidden') flush(); };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+      else pullCloud().catch(() => {}); // V5 lot 5 : retour sur l'app → changements faits ailleurs
+    };
     window.addEventListener('pagehide', flush);
     document.addEventListener('visibilitychange', onVis);
     return () => {
@@ -2084,13 +2198,19 @@ function CapApp({ session }) {
   useEffect(() => {
     // Toujours sauvegarder en local immédiatement (responsif, fallback hors-ligne)
     try { localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(state)); } catch {}
+    // V5 lot 5 : heure de la dernière modification locale (pas pour un état venu du cloud)
+    if (remoteApplyRef.current) remoteApplyRef.current = false;
+    else {
+      lastLocalEditRef.current = Date.now();
+      try { localStorage.setItem(LASTEDIT_KEY, String(lastLocalEditRef.current)); } catch {}
+    }
 
     if (!hasLoadedCloud) return; // Pas de save cloud avant le 1er load
     // Ne pas réécrire au cloud juste après une adoption (load ou résolution de conflit)
     if (skipCloudSaveRef.current) { skipCloudSaveRef.current = false; setCloudStatus('synced'); return; }
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setCloudStatus('syncing');
-    saveTimerRef.current = setTimeout(() => { doCloudSave(); }, 1500);
+    saveTimerRef.current = setTimeout(() => { saveTimerRef.current = null; doCloudSave(); }, 1500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
   }, [state, userId, hasLoadedCloud]);
 
@@ -2127,6 +2247,9 @@ function CapApp({ session }) {
         localStorage.removeItem(STORAGE_KEY_USER);
         localStorage.removeItem(CLOUD_REV_KEY);
         localStorage.removeItem(`${STORAGE_KEY_USER}-conflict`);
+        localStorage.removeItem(BASE_KEY);
+        localStorage.removeItem(LASTEDIT_KEY);
+        localStorage.removeItem(CONFLICTS_KEY);
         localStorage.removeItem(RUNNING_KEY);
         localStorage.removeItem(PUSH_KEY);
       } catch {}
@@ -4335,7 +4458,8 @@ function CapApp({ session }) {
         onClose={() => setShowReview(false)} onFinish={finishReview}
         onCapDecision={recordCapDecision} onSetCapStatus={setCapStatus} onUpdateCap={updateCap} onAddNudgeTask={addNudgeTask} />}
       {showSettings && <SettingsModal settings={state.settings} categories={state.categories} userEmail={userEmail} onClose={() => setShowSettings(false)} onSave={(newSettings) => setState(s => ({ ...s, settings: newSettings }))} onUpdateCategories={(cats) => setState(s => ({ ...s, categories: cats }))} onDeleteAccount={handleDeleteAccount}
-        push={{ status: pushInfo.status, onEnable: enablePush, onDisable: disablePush, onTest: testPush }} />}
+        push={{ status: pushInfo.status, onEnable: enablePush, onDisable: disablePush, onTest: testPush }}
+        sync={{ conflicts: syncConflicts, onRestore: restoreSyncConflict, onDismiss: dismissSyncConflict }} />}
     </div>
   );
 }
@@ -9318,6 +9442,44 @@ function DurationInput({ value, onChange }) {
   );
 }
 
+// V5 lot 5 : Réglages › Synchro — valeurs mises de côté lors d'un vrai conflit entre appareils
+const SYNC_FIELD_LABELS = { title: 'Titre', notes: 'Notes', date: 'Date', time: 'Heure', priority: 'Priorité', duration: 'Durée', deadline: 'Échéance', categoryId: 'Catégorie', completed: 'Terminé', energy: 'Énergie', recurrence: 'Récurrence', reminder: 'Rappel', status: 'Statut', why: 'Pourquoi', icon: 'Icône', pinned: 'Épinglé' };
+function syncValueLabel(v) {
+  if (v === undefined || v === null || v === '') return '(vide)';
+  if (v === true) return 'oui';
+  if (v === false) return 'non';
+  if (typeof v === 'object') { const s = JSON.stringify(v); return s.length > 60 ? s.slice(0, 60) + '…' : s; }
+  const s = String(v); return s.length > 60 ? s.slice(0, 60) + '…' : s;
+}
+function SyncConflictsSettings({ sync }) {
+  const { conflicts, onRestore, onDismiss } = sync;
+  return (
+    <>
+      <Label>Synchro</Label>
+      <div style={{ fontSize: '0.75rem', color: 'var(--ink-muted)', marginBottom: '0.5rem', lineHeight: 1.45 }}>
+        Modifié sur deux appareils à la fois : la version la plus récente a été gardée, l'autre est ici.
+      </div>
+      <div style={{ marginBottom: '0.5rem', maxHeight: '220px', overflowY: 'auto' }}>
+        {conflicts.map(c => (
+          <div key={c.id} style={{ fontSize: '0.8rem', padding: '0.45rem 0', borderBottom: '1px dashed var(--line)' }}>
+            <div>
+              {c.title ? <strong>« {c.title} »</strong> : <strong>{c.path}</strong>}
+              {' · '}{SYNC_FIELD_LABELS[c.field] || c.field}
+              <span className="mono" style={{ fontSize: '0.65rem', color: 'var(--ink-fog)', marginLeft: '0.4rem' }}>{new Date(c.at).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+            </div>
+            <div style={{ color: 'var(--ink-muted)' }}>gardé : {syncValueLabel(c.kept)} — mis de côté : {syncValueLabel(c.other)}</div>
+            <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.25rem' }}>
+              {c.itemId && (c.path || '').startsWith('items.') && <button className="cap-btn-mini" onClick={() => onRestore(c)}>Reprendre l'autre version</button>}
+              <button className="cap-btn-mini" style={{ borderColor: 'transparent', color: 'var(--ink-fog)' }} onClick={() => onDismiss(c.id)}>OK</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button className="btn-ghost" style={{ fontSize: '0.75rem', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-muted)', marginBottom: '1rem', padding: 0 }} onClick={() => onDismiss(null)}>Tout effacer</button>
+    </>
+  );
+}
+
 // V5 lot 4 : Réglages › Notifications (par appareil)
 function NotificationsSettings({ push }) {
   const { status, onEnable, onDisable, onTest } = push;
@@ -9510,7 +9672,7 @@ function CheckinModal({ currentMode, onClose, onSelect }) {
 }
 
 // ============ SETTINGS MODAL ============
-function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpdateCategories, onDeleteAccount, push }) {
+function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpdateCategories, onDeleteAccount, push, sync }) {
   const [form, setForm] = useState({ ...settings });
   const [editingCats, setEditingCats] = useState(categories);
   const [newCatName, setNewCatName] = useState('');
@@ -9602,6 +9764,7 @@ function SettingsModal({ settings, categories, userEmail, onClose, onSave, onUpd
         </div>
 
         {push && <NotificationsSettings push={push} />}
+        {sync && sync.conflicts.length > 0 && <SyncConflictsSettings sync={sync} />}
 
         <Label>Raccourcis clavier</Label>
         <div style={{ fontSize: '0.8rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '0.4rem 0.75rem', alignItems: 'center' }}>
