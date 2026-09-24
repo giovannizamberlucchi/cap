@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) codé, en preview**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) en prod le 2026-09-24**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -571,7 +571,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-3 en prod, lot 4 en preview, lots 5-9 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-4 en prod, lots 5-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -622,7 +622,7 @@ Ajouté au cadrage le 2026-09-24 : passer au build **avant** la PWA (qui en dép
 - Rien d'autre : pas de découpage en modules, pas de TypeScript, pas de lint (plus tard, progressivement). Données, clés localStorage, Supabase, schéma v14 : inchangés.
 - **Vérifié** : mêmes parcours et mêmes données sur l'ancienne et la nouvelle version, 25 captures comparées au pixel (tous les onglets, agenda jour/semaine/mois/année, modales, sombre, mobile, Démarrer) → identiques, hors animations en cours ; même état final des données ; aucune erreur JS. Bundle : 170 Ko gzip (+ 6 Ko CSS) au lieu de React + Babel standalone + source JSX.
 
-### Lot 4 — PWA + push ✅ codé (2026-09-24, en preview)
+### Lot 4 — PWA + push ✅ en prod (2026-09-24)
 **Cadrage validé** (2026-09-24) : PWA installable et hors ligne, push via Supabase, **+ rappels sur les récurrentes / routines** (manque constaté : le rappel était masqué dès qu'il y avait une récurrence) **+ push des fins de phase « Démarrer »**. Plus de demande d'autorisation au premier clic.
 
 **PWA**
