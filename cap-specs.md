@@ -1,6 +1,6 @@
 # Cap — Specs (V4 en cours) + Roadmap
 
-> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) en prod le 2026-09-24 · lot 5 (synchro par fusion) codé, en preview**. Schema version **14**.
+> **État** (au 2026-09-23) : V3 livrée intégralement · V4 4a.1 (Boussole) + correctifs sync #1/#2 + logo/loader en prod · **Phase 4 (4a.2 → 4g) livrée en 8 lots, en prod depuis le 2026-09-23 (commit `24d726a`)** · **V5 cadrée (9 lots) — lots 1 et 2 en prod le 2026-09-23 · lot 3 (migration React + Vite) en prod le 2026-09-24 · lot 4 (PWA + push) en prod le 2026-09-24 · lot 5 (synchro par fusion) en prod le 2026-09-24**. Schema version **14**.
 > Specs maître unique, **versionnées dans le repo** (`cap-specs.md`, depuis le 2026-09-23) — la version vit dans le contenu (sections, statuts livré/à coder), pas dans le nom de fichier. Le repo est la source de vérité ; le projet Claude.ai n'en est plus qu'un reflet éventuel. Les règles de travail avec Claude sont dans `CLAUDE.md`.
 
 App de productivité TDAH. Web déployée → futur mobile natif éventuel.
@@ -572,7 +572,7 @@ Cadrage validé le 2026-09-23 (recos : pas de jauge sans jalon daté, focus hebd
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-4 en prod, lot 5 en preview, lots 6-9 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-5 en prod, lots 6-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
@@ -648,7 +648,7 @@ Ajouté au cadrage le 2026-09-24 : passer au build **avant** la PWA (qui en dép
 - **Vérifié** : chiffrement Web Push sous Deno (déchiffrement contrôlé), chaîne serveur de bout en bout (rappel dû → envoi → abonnement mort supprimé), calcul des rappels (routine 2 créneaux, heure de partir, hebdo, flottante exclue, coche → retiré), rappels de session (5 phases, pause / reprise / arrêt), SW actif, hors ligne, lien `?item=`, toast de mise à jour ; non-régression visuelle (seuls les Réglages changent). **La réception réelle d'une notification ne se teste que sur un vrai appareil.**
 - **Limites** : iPhone → Cap installé sur l'écran d'accueil (iOS 16.4+) ; précision ~1 min (pg_cron) ; les fins de phase d'une session sont envoyées à **tous** les appareils abonnés du compte.
 
-### Lot 5 — Synchro ✅ codé (2026-09-24, en preview)
+### Lot 5 — Synchro ✅ en prod (2026-09-24)
 Spec d'origine : en cas de conflit, fusion à 3 voies par tâche au lieu d'adopter tout le cloud ; même tâche modifiée des deux côtés → la plus récente gagne, l'autre en stash.
 - **Constat au cadrage** : 2 chemins de perte — (1) sauvegarde refusée (CAS) → local mis de côté en bloc (`-conflict`, invisible) et cloud adopté ; (2) au démarrage, cloud plus récent adopté **même si l'appareil avait des modifications non envoyées** (perdues sans stash). Angle mort : un onglet ouvert ne voyait jamais les changements faits ailleurs.
 - **Module `src/sync-merge.js`** (pur, premier module sorti de `App.jsx`, validé) : `mergeStates(base, local, cloud, { localNewer })` → `{ merged, conflicts }`.
@@ -762,7 +762,7 @@ Spec d'origine : en cas de conflit, fusion à 3 voies par tâche au lieu d'adopt
 
 ---
 
-## V5 — cadrage validé le 2026-09-23 (lots 1-4 en prod, lot 5 en preview, lots 6-9 à coder)
+## V5 — cadrage validé le 2026-09-23 (lots 1-5 en prod, lots 6-9 à coder)
 
 **Thème : fiabilité du quotidien + planification par semaine.** Ouverture (partage, testeurs, Android natif, domaine) → plus tard. Ajustements fins : à l'usage.
 
